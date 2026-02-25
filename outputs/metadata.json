@@ -1,0 +1,17 @@
+[
+  {
+    "counter": 1,
+    "media_type": "image",
+    "priority": "normal",
+    "timestamp": "2026-02-25T16:58:40.180929",
+    "headline": "ఆర్థిక నివేదిక విడుదల",
+    "script_filename": "si1.txt",
+    "headline_filename": "hi1.txt",
+    "headline_audio": "hi1.mp3",
+    "script_audio": "oai1.mp3",
+    "script_duration": 42.062948,
+    "headline_duration": 1.439637,
+    "total_duration": 44.002584999999996,
+    "used_count": 1
+  }
+]

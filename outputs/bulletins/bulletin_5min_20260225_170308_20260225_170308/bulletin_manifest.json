@@ -1,0 +1,25 @@
+{
+  "bulletin_name": "bulletin_5min_20260225_170308",
+  "duration_minutes": 5,
+  "item_count": 1,
+  "filler_duration": 0.0,
+  "created_at": "2026-02-25T17:03:08.264936",
+  "items": [
+    {
+      "rank": 1,
+      "counter": 1,
+      "media_type": "image",
+      "priority": "normal",
+      "timestamp": "2026-02-25T16:58:40.180929",
+      "headline": "ఆర్థిక నివేదిక విడుదల",
+      "headline_audio": "01_hi1.mp3",
+      "script_audio": "01_oai1.mp3",
+      "script_duration": 42.062948,
+      "headline_duration": 1.439637,
+      "total_duration": 44.002584999999996
+    }
+  ],
+  "final_video": "C:\\Users\\Gyanaranjan kabi\\Desktop\\localainews\\testing\\outputs\\bulletins\\bulletin_5min_20260225_170308_20260225_170308\\bulletin_5min_20260225_170308.mp4",
+  "actual_duration_s": 298.04,
+  "target_duration_s": 300
+}
