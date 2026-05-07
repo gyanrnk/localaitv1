@@ -746,6 +746,26 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
             if all(_effective_dur(a) > (filler_duration - FILLER_MIN) for a in _ad_reserve):
                 break
 
+    # _ad_reserve khatam — agar filler bahut lamba hai to locally downloaded ads reuse karo
+    FILLER_REUSE_THRESHOLD = 30.0
+    if filler_duration > FILLER_REUSE_THRESHOLD and _ad_clips_pool:
+        import random as _rand
+        _reuse_pool = _ad_clips_pool[:]
+        _rand.shuffle(_reuse_pool)
+        for _reuse_ad in _reuse_pool:
+            if filler_duration <= FILLER_MAX:
+                break
+            _reuse_dur = _effective_dur(_reuse_ad)
+            if _reuse_dur <= 0:
+                continue
+            if filler_duration - _reuse_dur >= FILLER_MIN:
+                _injections.append({
+                    'path': _reuse_ad,
+                    'duration': _reuse_dur,
+                    'label': f'ad_reuse_{len(_injections)+1}'
+                })
+                filler_duration -= _reuse_dur
+                print(f"  [FILLER-REUSE] Ad reused ({_reuse_dur:.1f}s) → filler={filler_duration:.1f}s")
 
     print(f"  [FILLER-FINAL] {filler_duration:.2f}s (target: {FILLER_MIN}-{FILLER_MAX}s)")
     for item in selected:
