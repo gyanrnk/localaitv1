@@ -20,7 +20,8 @@ from telugu_processor import TeluguProcessor
 from tts_handler import TTSHandler, set_voice_counter
 from bulletin_builder import append_news_item
 import report_state_manager as _rsm
-from config import OUTPUT_AUDIO_DIR, REPORTER_PHOTO_DIR, ADDRESS_GIF_PATH
+from config import OUTPUT_AUDIO_DIR, REPORTER_PHOTO_DIR, ADDRESS_GIF_PATH, ensure_assets
+ensure_assets()  # download missing static assets from S3 on startup
 from openai_handler import OpenAIHandler
 from clip_analyzer import get_structure_decision, should_use_clip_first
  
@@ -78,14 +79,18 @@ class NewsBot:
  
     def _recover_stuck_items(self):
         """Startup pe 'processing' stuck items ko 'failed' mark karo."""
+        # Old JSON version (commented out — STATE_FILE removed after DB migration):
+        # from report_state_manager import STATE_FILE, mark_failed
+        # if not os.path.exists(STATE_FILE): return
+        # with open(STATE_FILE, 'r', encoding='utf-8') as f: data = json.load(f)
+        # stuck = [k for k, v in data.items() if v.get('status') == 'processing']
         try:
-            import json
-            from report_state_manager import STATE_FILE, mark_failed
-            if not os.path.exists(STATE_FILE):
-                return
-            with open(STATE_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            stuck = [k for k, v in data.items() if v.get('status') == 'processing']
+            from report_state_manager import mark_failed
+            import db as _db_recover
+            stuck_rows = _db_recover.fetchall(
+                "SELECT report_id FROM processed_reports WHERE status = 'processing'"
+            )
+            stuck = [r['report_id'] for r in stuck_rows]
             if stuck:
                 print(f"⚠️ [Startup] {len(stuck)} stuck items — marking failed for reprocess")
                 for rid in stuck:
@@ -142,12 +147,18 @@ class NewsBot:
         import tempfile, concurrent.futures
  
         # Sync voice counter to this item's index so same voice is reused
-        from bulletin_builder import load_metadata as _load_meta_regen
-        existing_items = _load_meta_regen()
-        item_index = next(
-            (i for i, x in enumerate(existing_items) if x.get('counter') == counter),
-            0
+        # from bulletin_builder import load_metadata as _load_meta_regen
+        # existing_items = _load_meta_regen()
+        # item_index = next(
+        #     (i for i, x in enumerate(existing_items) if x.get('counter') == counter),
+        #     0
+        # )
+        # set_voice_counter(item_index)
+        import db as _db_regen
+        _idx_row = _db_regen.fetchall(
+            "SELECT COUNT(*) AS n FROM news_items WHERE counter <= %s", (counter,)
         )
+        item_index = max(0, int(_idx_row[0]['n']) - 1) if _idx_row else 0
         set_voice_counter(item_index)
         _regen_tts = TTSHandler.for_item()
         print(f"🎙️  [REGEN] Item {counter} voice: {_regen_tts.speaker.upper()} (index={item_index})")
@@ -183,9 +194,9 @@ class NewsBot:
             results = [f.result() for f in futures]
  
         # ── Step 4: Duration recalculate + status update ──────────────────────────
-        from bulletin_builder import load_metadata, save_metadata, _metadata_lock  
+        # from bulletin_builder import load_metadata, save_metadata, _metadata_lock
         import subprocess
- 
+
         def _dur(p):
             try:
                 r = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
@@ -194,19 +205,30 @@ class NewsBot:
                 return float(r.stdout.decode().strip())
             except:
                 return 0.0
- 
-        with _metadata_lock:                                        # ← ADD
-            all_items = load_metadata()
-            for m in all_items:
-                if m.get('counter') == counter and m.get('media_type') == media_type:
-                    if os.path.exists(sa_path):
-                        m['script_duration']   = _dur(sa_path)
-                    if os.path.exists(ha_path):
-                        m['headline_duration'] = _dur(ha_path)
-                    m['status'] = 'complete'
-                    print(f"  [REGEN] ✅ Item {counter} regenerated successfully")
-                    break
-            save_metadata(all_items)
+
+        # with _metadata_lock:
+        #     all_items = load_metadata()
+        #     for m in all_items:
+        #         if m.get('counter') == counter and m.get('media_type') == media_type:
+        #             if os.path.exists(sa_path):
+        #                 m['script_duration']   = _dur(sa_path)
+        #             if os.path.exists(ha_path):
+        #                 m['headline_duration'] = _dur(ha_path)
+        #             m['status'] = 'complete'
+        #             print(f"  [REGEN] ✅ Item {counter} regenerated successfully")
+        #             break
+        #     save_metadata(all_items)
+        import db as _db_regen2
+        _sd = _dur(sa_path) if os.path.exists(sa_path) else None
+        _hd = _dur(ha_path) if os.path.exists(ha_path) else None
+        _db_regen2.execute("""
+            UPDATE news_items SET
+                status            = 'complete',
+                script_duration   = COALESCE(%s, script_duration),
+                headline_duration = COALESCE(%s, headline_duration)
+            WHERE counter = %s AND media_type = %s
+        """, (_sd, _hd, counter, media_type))
+        print(f"  [REGEN] ✅ Item {counter} regenerated successfully")
         return True
  
     def _extract_audio_from_video(self, video_path: str) -> Optional[str]:
@@ -770,10 +792,13 @@ class NewsBot:
         # _item_tts = TTSHandler.for_item()   # same instance for ALL audio of this item
         # print(f"🎙️  Item voice: {_item_tts.speaker.upper()} (headline + script + intro + analysis)")
  
-        from bulletin_builder import load_metadata as _load_meta, _metadata_lock
-        with _metadata_lock:
-            set_voice_counter(len(_load_meta()))
-            _item_tts = TTSHandler.for_item()
+        # from bulletin_builder import load_metadata as _load_meta, _metadata_lock
+        # with _metadata_lock:
+        #     set_voice_counter(len(_load_meta()))
+        import db as _db_vc1
+        _vc1_row = _db_vc1.fetchall("SELECT COUNT(*) AS n FROM news_items")
+        set_voice_counter(int(_vc1_row[0]["n"]) if _vc1_row else 0)
+        _item_tts = TTSHandler.for_item()
         print(f"🎙️  Item voice: {_item_tts.speaker.upper()} (headline + script + intro + analysis)")
  
         def _gen_script():
@@ -1243,10 +1268,13 @@ class NewsBot:
             # set_voice_counter(len(_load_meta()))
             # _item_tts = TTSHandler.for_item()   # same instance for ALL audio of this item
             # print(f"🎙️  Item voice: {_item_tts.speaker.upper()} (headline + script + intro + analysis)")
-            from bulletin_builder import load_metadata as _load_meta, _metadata_lock
-            with _metadata_lock:
-                set_voice_counter(len(_load_meta()))
-                _item_tts = TTSHandler.for_item()
+            # from bulletin_builder import load_metadata as _load_meta, _metadata_lock
+            # with _metadata_lock:
+            #     set_voice_counter(len(_load_meta()))
+            import db as _db_vc2
+            _vc2_row = _db_vc2.fetchall("SELECT COUNT(*) AS n FROM news_items")
+            set_voice_counter(int(_vc2_row[0]["n"]) if _vc2_row else 0)
+            _item_tts = TTSHandler.for_item()
             print(f"🎙️  Item voice: {_item_tts.speaker.upper()} (headline + script + intro + analysis)")
  
             def _gen_script():

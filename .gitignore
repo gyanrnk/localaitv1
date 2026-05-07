@@ -44,7 +44,7 @@ item_events.db
 news_bulletin.db
 metadata.json
 tesst.py
-
+test1.py
 # Celery
 celerybeat-schedule*
 *.log

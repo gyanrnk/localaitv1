@@ -345,7 +345,8 @@ TICKER_ENABLED           = os.getenv('TICKER_ENABLED', 'true').lower() != 'false
 # ── AWS S3 Storage ────────────────────────────────────────────────────────────
 # ── S3 Injected Bulletin ──────────────────────────────────────────────────────
 S3_INJECT_ENABLED       = os.getenv('S3_INJECT_ENABLED', 'true').lower() != 'false'
-S3_BUCKET_NAME_M          = os.getenv('S3_BUCKET_NAME_M', 'your-bucket-name')
+S3_BUCKET_NAME          = os.getenv('S3_BUCKET_NAME', '')        # our own bucket (ads, static assets, bulletins)
+S3_BUCKET_NAME_M        = os.getenv('S3_BUCKET_NAME_M', '')      # external bucket (whoiswho, vege, trainroutes)
 S3_BULLETIN_PREFIX = os.getenv('S3_BULLETIN_PREFIX', 'whoiswho/outputs')
 S3_REGION = os.getenv('AWS_REGION_M', 'ap-south-2')   # ← 2
 S3_INJECT_LOCAL_DIR     = os.path.join(BASE_OUTPUT_DIR, 's3_inject_cache')
@@ -357,3 +358,43 @@ S3_INJECT_DURATION = int(os.getenv('S3_INJECT_DURATION', '60'))  # seconds
 # Default: SQLite file alongside the project.  Override with a full
 # postgresql://user:pass@host:5432/dbname URL in production.
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/news_bulletin.db")
+
+# ── Static Asset Bootstrap (S3 → local) ───────────────────────────────────────
+S3_STATIC_PREFIX = os.getenv('S3_STATIC_PREFIX', 'static-assets')
+
+# All static assets the app needs locally — relative to BASE_DIR
+_STATIC_ASSETS = [
+    'assets/address.gif',
+    'assets/ticker2.png',
+    'assets/ticker3.png',
+    'assets/ticker4.png',
+    'assets/kurnool_and_local.png',
+    'assets/filler.mp4',
+    'assets/break.mp4',
+    'assets/cap1.mp4',
+    'assets/template4.mp4',
+    'assets/logo3.mov',
+    'assets/intro4.mp4',
+    'assets/Gidugu Regular.otf',
+    'news_intro.mpeg',
+]
+
+def ensure_assets():
+    """Download missing static assets from S3. Skips files that already exist locally."""
+    import boto3
+    missing = [a for a in _STATIC_ASSETS if not os.path.exists(os.path.join(BASE_DIR, a))]
+    if not missing:
+        return
+    s3 = boto3.client('s3', region_name=S3_REGION,
+                      aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+                      aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'))
+    for asset in missing:
+        local_path = os.path.join(BASE_DIR, asset)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        s3_key = f"{S3_STATIC_PREFIX}/{asset}"
+        try:
+            s3.download_file(S3_BUCKET_NAME, s3_key, local_path)
+            print(f"[assets] ✅ Downloaded: {asset}")
+        except Exception as e:
+            print(f"[assets] ⚠️ Could not download {asset}: {e}")
+# ─────────────────────────────────────────────────────────────────────────────

@@ -61,32 +61,193 @@ def _save_ticker_cursor(val: float):
 
 CLIP_MAX = 20  # max clip duration to consider for allocation (in seconds)
 
+# def load_metadata() -> List[Dict]:
+#     if not os.path.exists(METADATA_FILE):
+#         return []
+#     try:
+#         with open(METADATA_FILE, 'r', encoding='utf-8') as f:
+#             return json.load(f)
+#     except Exception as e:
+#         print(f"❌ Error loading metadata: {e}")
+#         return []
+
 def load_metadata() -> List[Dict]:
-    if not os.path.exists(METADATA_FILE):
-        return []
     try:
-        with open(METADATA_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        import db as _db
+        rows = _db.fetchall("SELECT * FROM news_items ORDER BY counter ASC")
+        for r in rows:
+            for k in ('multi_image_paths', 'multi_video_paths'):
+                v = r.get(k)
+                if isinstance(v, str):
+                    try:
+                        r[k] = json.loads(v)
+                    except Exception:
+                        r[k] = []
+        return rows
     except Exception as e:
-        print(f"❌ Error loading metadata: {e}")
+        print(f"❌ Error loading news_items from DB: {e}")
         return []
 
+
+# def save_metadata(items: List[Dict]):
+#     os.makedirs(BASE_OUTPUT_DIR, exist_ok=True)
+#     try:
+#         with open(METADATA_FILE, 'w', encoding='utf-8') as f:
+#             json.dump(items, f, ensure_ascii=False, indent=2)
+#     except Exception as e:
+#         print(f"❌ Error saving metadata: {e}")
 
 def save_metadata(items: List[Dict]):
-    os.makedirs(BASE_OUTPUT_DIR, exist_ok=True)
-    try:
-        with open(METADATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(items, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"❌ Error saving metadata: {e}")
+    """Update mutable fields of existing news_items rows in DB."""
+    import db as _db
+    for item in items:
+        counter = item.get('counter')
+        if counter is None:
+            continue
+        _db.execute("""
+            UPDATE news_items SET
+                used_count        = %s,
+                next_bulletin     = %s,
+                bulletined        = %s,
+                priority          = COALESCE(%s, priority),
+                item_video_local  = %s,
+                incident_id       = %s,
+                script_duration   = %s,
+                headline_duration = %s,
+                total_duration    = %s
+            WHERE counter = %s
+        """, (
+            item.get('used_count', 0),
+            1 if item.get('next_bulletin') else 0,
+            1 if item.get('bulletined') else 0,
+            item.get('priority'),
+            item.get('item_video_local'),
+            item.get('incident_id'),
+            item.get('script_duration', 0.0),
+            item.get('headline_duration', 0.0),
+            item.get('total_duration', 0.0),
+            counter,
+        ))
 
+
+def delete_news_items(counters: list):
+    """Delete news_items rows by counter list (used by cleanup loop)."""
+    import db as _db
+    if not counters:
+        return
+    _db.execute("DELETE FROM news_items WHERE counter = ANY(%s)", (list(counters),))
+
+
+# def append_news_item(item: Dict):
+#     with _metadata_lock:
+#         items = load_metadata()
+#         items.append(item)
+#         save_metadata(items)
+#     print(f"✅ Metadata saved for item {item.get('counter')} [{item.get('priority')}]")
+#
+#     from event_logger import log_event
+#     log_event(
+#         event      = 'bulletin_added',
+#         counter    = item.get('counter'),
+#         media_type = item.get('media_type'),
+#     )
 
 def append_news_item(item: Dict):
-    with _metadata_lock:
-        items = load_metadata()
-        items.append(item)
-        save_metadata(items)
-    print(f"✅ Metadata saved for item {item.get('counter')} [{item.get('priority')}]")
+    import db as _db
+    multi_images = item.get('multi_image_paths', [])
+    if isinstance(multi_images, list):
+        multi_images = json.dumps(multi_images, ensure_ascii=False)
+
+    _db.execute("""
+        INSERT INTO news_items (
+            counter, media_type, priority,
+            sender, sender_name, sender_photo,
+            timestamp, headline, script_filename,
+            headline_audio, script_audio,
+            intro_audio_filename, analysis_audio_filename,
+            headline_duration, script_duration, total_duration, allocated_duration,
+            clip_structure, clip_start, clip_end, clip_video_path,
+            location_id, location_name,
+            user_id, original_text,
+            intro_script, analysis_script,
+            multi_image_paths,
+            used_count, bulletined, next_bulletin,
+            s3_key_input, s3_key_script_audio, s3_key_headline_audio,
+            storage_key, item_manifest
+        ) VALUES (
+            %s, %s, %s,
+            %s, %s, %s,
+            %s, %s, %s,
+            %s, %s,
+            %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s,
+            %s, %s,
+            %s, %s,
+            %s,
+            %s, %s, %s,
+            %s, %s, %s,
+            %s, %s
+        ) ON CONFLICT (counter, media_type) DO UPDATE SET
+            priority                = EXCLUDED.priority,
+            headline                = EXCLUDED.headline,
+            script_audio            = EXCLUDED.script_audio,
+            script_duration         = EXCLUDED.script_duration,
+            headline_duration       = EXCLUDED.headline_duration,
+            total_duration          = EXCLUDED.total_duration,
+            clip_structure          = EXCLUDED.clip_structure,
+            clip_start              = EXCLUDED.clip_start,
+            clip_end                = EXCLUDED.clip_end,
+            clip_video_path         = EXCLUDED.clip_video_path,
+            intro_audio_filename    = EXCLUDED.intro_audio_filename,
+            analysis_audio_filename = EXCLUDED.analysis_audio_filename,
+            intro_script            = EXCLUDED.intro_script,
+            analysis_script         = EXCLUDED.analysis_script,
+            multi_image_paths       = EXCLUDED.multi_image_paths,
+            original_text           = EXCLUDED.original_text,
+            location_id             = EXCLUDED.location_id,
+            location_name           = EXCLUDED.location_name,
+            sender_photo            = EXCLUDED.sender_photo
+    """, (
+        item.get('counter'),
+        item.get('media_type', 'video'),
+        item.get('priority', 'normal'),
+        item.get('sender', item.get('sender_name', '')),
+        item.get('sender_name', ''),
+        item.get('sender_photo', ''),
+        item.get('timestamp', item.get('created_at', datetime.now().isoformat())),
+        item.get('headline', ''),
+        item.get('script_filename', ''),
+        item.get('headline_audio', ''),
+        item.get('script_audio', ''),
+        item.get('intro_audio_filename'),
+        item.get('analysis_audio_filename'),
+        float(item.get('headline_duration', 0.0)),
+        float(item.get('script_duration', 0.0)),
+        float(item.get('total_duration', 0.0)),
+        float(item.get('allocated_duration', 0.0)),
+        item.get('clip_structure'),
+        item.get('clip_start'),
+        item.get('clip_end'),
+        item.get('clip_video_path'),
+        item.get('location_id', 0),
+        item.get('location_name', ''),
+        item.get('user_id', ''),
+        item.get('original_text', ''),
+        item.get('intro_script', ''),
+        item.get('analysis_script', ''),
+        multi_images,
+        0,
+        0,
+        0,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ))
+    print(f"✅ DB: news_item inserted counter={item.get('counter')} [{item.get('priority')}]")
 
     from event_logger import log_event
     log_event(
@@ -342,14 +503,13 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
     intro_dur = INTRO_VIDEO_DURATION
 
-    # ── Pre-fetch WhoisWho (S3) + Ad clips (LOCAL) ────────────────────────────
-    from s3_bulletin_fetcher import fetch_whoiswho_bulletin, fetch_local_ad_clips
+    # ── Pre-fetch WhoisWho (S3) + Ad clips (S3) ──────────────────────────────
+    from s3_bulletin_fetcher import fetch_whoiswho_bulletin, fetch_ad_clips
 
     _whoiswho_clip = fetch_whoiswho_bulletin()           # S3 se 1-min clip
-    # _ad_clips      = fetch_local_ad_clips()[:4]          # local assets/ads/ se max 4
-    _ad_clips_pool = fetch_local_ad_clips()  # pura pool
-    _ad_clips = _ad_clips_pool[:4]            # initial 4
-    _ad_reserve = _ad_clips_pool[4:10] 
+    _ad_clips_pool = fetch_ad_clips()                    # S3 se ads pool
+    _ad_clips = _ad_clips_pool[:4]                       # initial 4
+    _ad_reserve = _ad_clips_pool[4:10]
 
     def _quick_dur(path: str) -> float:
         try:
@@ -506,15 +666,27 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
     # ── Flag skipped items → next bulletin ───────────────────────────────────
     if skipped:
-        with _metadata_lock:
-            all_meta = load_metadata()
-            meta_map = {str(m.get('counter')): m for m in all_meta}
-            for item in skipped:
-                ctr = str(item.get('counter'))
-                print(f"  ↪  Item {ctr} | dur={item.get('total_duration', 0):.2f}s")
-                if ctr in meta_map:
-                    meta_map[ctr]['next_bulletin'] = True
-            save_metadata(list(meta_map.values()))
+        # with _metadata_lock:
+        #     all_meta = load_metadata()
+        #     meta_map = {str(m.get('counter')): m for m in all_meta}
+        #     for item in skipped:
+        #         ctr = str(item.get('counter'))
+        #         print(f"  ↪  Item {ctr} | dur={item.get('total_duration', 0):.2f}s")
+        #         if ctr in meta_map:
+        #             meta_map[ctr]['next_bulletin'] = True
+        #     save_metadata(list(meta_map.values()))
+        import db as _db
+        skipped_counters = []
+        for item in skipped:
+            ctr = item.get('counter')
+            print(f"  ↪  Item {ctr} | dur={item.get('total_duration', 0):.2f}s")
+            if ctr is not None:
+                skipped_counters.append(ctr)
+        if skipped_counters:
+            _db.execute(
+                "UPDATE news_items SET next_bulletin = TRUE WHERE counter = ANY(%s)",
+                (skipped_counters,)
+            )
 
     actual_break_overhead = _break_overhead(len(selected))
     budget                = TARGET - intro_dur - actual_break_overhead
@@ -973,12 +1145,17 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
     # Update used_count
     selected_counters = {item.get('counter') for item in selected}
-    with _metadata_lock:
-        all_items_updated = load_metadata()
-        for item in all_items_updated:
-            if item.get('counter') in selected_counters:
-                item['used_count'] = item.get('used_count', 0) + 1
-        save_metadata(all_items_updated)
+    # with _metadata_lock:
+    #     all_items_updated = load_metadata()
+    #     for item in all_items_updated:
+    #         if item.get('counter') in selected_counters:
+    #             item['used_count'] = item.get('used_count', 0) + 1
+    #     save_metadata(all_items_updated)
+    import db as _db
+    _db.execute(
+        "UPDATE news_items SET used_count = used_count + 1 WHERE counter = ANY(%s)",
+        (list(selected_counters),)
+    )
     print(f"✅ used_count updated for {len(selected_counters)} items")
 
     print("-" * 50)

@@ -2,8 +2,13 @@
 import psycopg2
 import psycopg2.extras
 import os
+from dotenv import load_dotenv
 
-DATABASE_URL = os.getenv("DATABASE_URL")  # config se nahi, direct env se
+load_dotenv()
+
+_raw = os.getenv("DATABASE_URL", "")
+# psycopg2 needs postgresql:// not postgresql+psycopg2:// (SQLAlchemy format)
+DATABASE_URL = _raw.replace("postgresql+psycopg2://", "postgresql://", 1)
 
 def get_conn():
     conn = psycopg2.connect(DATABASE_URL)

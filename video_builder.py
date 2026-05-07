@@ -83,10 +83,14 @@ if not TELUGU_FONT or not os.path.exists(TELUGU_FONT):
             break
         
 if not TELUGU_FONT or not os.path.exists(TELUGU_FONT):
-    _local = os.path.join(os.path.dirname(__file__), 'NotoSansTelugu.ttf')
-    if os.path.exists(_local):
-        TELUGU_FONT = _local
-        print(f"✓ Local font: {_local}")
+    for _local in [
+        os.path.join(os.path.dirname(__file__), 'NotoSansTelugu.ttf'),
+        os.path.join(os.path.dirname(__file__), 'assets', 'Gidugu Regular.otf'),
+    ]:
+        if os.path.exists(_local):
+            TELUGU_FONT = _local
+            print(f"✓ Local font: {_local}")
+            break
 if not TELUGU_FONT or not os.path.exists(TELUGU_FONT):
     for _f in [r'C:\Windows\Fonts\NirmalaB.ttf', r'C:\Windows\Fonts\gautamib.ttf']:
         if os.path.exists(_f):
@@ -2004,18 +2008,18 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
         return None
     all_segments.append(intro_seg)
     log.info(f"[CHECKPOINT-2] Intro built | seg={intro_seg} | dur={_video_duration(intro_seg):.2f}s")
-    filler_png  = os.path.join(BASE_DIR, 'filler.mp4')
-    break_video = os.path.join(BASE_DIR, 'break.mp4')
-    break_news  = os.path.join(BASE_DIR, 'cap1.mp4')
+    filler_png  = os.path.join(BASE_DIR, 'assets', 'filler.mp4')
+    break_video = os.path.join(BASE_DIR, 'assets', 'break.mp4')
+    break_news  = os.path.join(BASE_DIR, 'assets', 'cap1.mp4')
     break_media = break_video if os.path.exists(break_video) else filler_png
- 
+
     intro_break_seg = os.path.join(segments_dir, f'{str(seg_idx).zfill(3)}_break_after_intro.mp4')
     seg_idx += 1
     if build_filler_segment(break_media, BREAK_DURATION, intro_break_seg):
         all_segments.append(intro_break_seg)
- 
+
     from config import BASE_DIR as _BASE_DIR
-    template_path = os.path.join(_BASE_DIR, 'template4.mp4')
+    template_path = os.path.join(_BASE_DIR, 'assets', 'template4.mp4')
     if not os.path.exists(template_path):
         template_path = None
  
@@ -2824,8 +2828,8 @@ if __name__ == '__main__':
         if not bulletin_dir:
             sys.exit(1)
  
-    logo  = sys.argv[2] if len(sys.argv) >= 3 else os.path.join(BASE_DIR, 'logo3.mov')
-    intro = sys.argv[3] if len(sys.argv) >= 4 else os.path.join(BASE_DIR, 'intro4.mp4')
+    logo  = sys.argv[2] if len(sys.argv) >= 3 else os.path.join(BASE_DIR, 'assets', 'logo3.mov')
+    intro = sys.argv[3] if len(sys.argv) >= 4 else os.path.join(BASE_DIR, 'assets', 'intro4.mp4')
  
     result = build_bulletin_video(bulletin_dir, logo, intro)
     if result:

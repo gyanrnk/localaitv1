@@ -4,7 +4,7 @@ from flask import Flask, json, request, jsonify
 import pytz
 from event_logger import init_db, save_incident
 from main import NewsBot
-from bulletin_builder import build_bulletin, load_metadata
+from bulletin_builder import build_bulletin, load_metadata, delete_news_items
 from video_builder import build_bulletin_video
 from governor.build_queue import queue_bulletin_build  # [BUILD QUEUE HOOK]
 try:
@@ -254,7 +254,9 @@ _last_count    = 0
 
 def _get_metadata_count() -> int:
     try:
-        return len(load_metadata())
+        import db as _db
+        row = _db.fetchall("SELECT COUNT(*) AS n FROM news_items")
+        return int(row[0]['n']) if row else 0
     except Exception:
         return 0
 
@@ -501,15 +503,20 @@ def _send_bulletin_items_to_api(items: list, segments_url: str, bulletin_dir: st
     # ── Metadata EK BAAR update karo — loop ke bahar ─────────────────────────
 
     if results:
-        from bulletin_builder import load_metadata, save_metadata, _metadata_lock
-        with _metadata_lock:
-            all_meta = load_metadata()
-            for m in all_meta:
-                key = (m.get('counter'), m.get('media_type'))
-                if key in results:
-                    m['incident_id'] = results[key]
-            save_metadata(all_meta)
-        # ADD:
+        # from bulletin_builder import load_metadata, save_metadata, _metadata_lock
+        # with _metadata_lock:
+        #     all_meta = load_metadata()
+        #     for m in all_meta:
+        #         key = (m.get('counter'), m.get('media_type'))
+        #         if key in results:
+        #             m['incident_id'] = results[key]
+        #     save_metadata(all_meta)
+        import db as _db
+        for (counter, media_type), incident_id in results.items():
+            _db.execute(
+                "UPDATE news_items SET incident_id = %s WHERE counter = %s",
+                (incident_id, counter)
+            )
         from event_logger import update_incident_id
         # for (counter, media_type), incident_id in results.items():
         #     update_incident_id(counter, media_type, incident_id)
@@ -787,8 +794,8 @@ def _run_planner():
             return
 
         _base      = BASE_DIR or os.path.dirname(os.path.abspath(__file__))
-        logo_path  = os.path.join(_base, 'logo3.mov')
-        intro_path = os.path.join(_base, 'intro4.mp4')
+        logo_path  = os.path.join(_base, 'assets', 'logo3.mov')
+        intro_path = os.path.join(_base, 'assets', 'intro4.mp4')
 
         if not os.path.exists(logo_path):
             logger.error(f"❌ logo3.mov not found at: {logo_path}")
@@ -957,16 +964,13 @@ def _run_planner():
                             #         shutil.copy2(existing, item_out)
                             #         item_dict['item_video_local'] = item_out
                             logger.info(f"  ♻️  [rank={rank}] Reused video copied → {os.path.basename(item_out)}")
-                            from bulletin_builder import load_metadata, save_metadata, _metadata_lock
-                            with _metadata_lock:
-                                all_meta = load_metadata()
-                                for m in all_meta:
-                                    if m.get('counter') == counter and m.get('media_type') == mtype:
-                                        m['item_video_local'] = item_out
-                                        break
-                                save_metadata(all_meta)
-                                # else:
-                                #     logger.info(f"  ♻️  [rank={rank}] Already at correct path — skip copy")
+                            # from bulletin_builder import load_metadata, save_metadata, _metadata_lock
+                            # with _metadata_lock:  # DB handles concurrency
+                            import db as _db_ivl
+                            _db_ivl.execute(
+                                "UPDATE news_items SET item_video_local = %s WHERE counter = %s",
+                                (item_out, counter)
+                            )
                             logger.info(f"  ⏭️  [rank={rank}] Reused item — incident re-post skip")
                             processed_ranks.add(rank)
                             continue
@@ -998,15 +1002,13 @@ def _run_planner():
                             #     logger.warning(f"  ⚠️  [CACHE] copy failed counter={counter}: {_ce}")
 
                             # ── Metadata update ───────────────────────────────
-                            from bulletin_builder import load_metadata, save_metadata, _metadata_lock
-                            with _metadata_lock:
-                                all_meta = load_metadata()
-                                for m in all_meta:
-                                    if m.get('counter') == counter and m.get('media_type') == mtype:
-                                        m['item_video_local'] = item_out
-                                        # m['item_video_cached'] = cache_dst if 'cache_dst' in dir() else ''
-                                        break
-                                save_metadata(all_meta)
+                            # from bulletin_builder import load_metadata, save_metadata, _metadata_lock
+                            # with _metadata_lock:  # DB handles concurrency
+                            import db as _db_ivl2
+                            _db_ivl2.execute(
+                                "UPDATE news_items SET item_video_local = %s WHERE counter = %s",
+                                (item_out, counter)
+                            )
                             logger.info(f"  💾 [rank={rank}] metadata saved")
 
                             # ── TURANT incident fire — bulletin ka wait nahi ───
@@ -1081,10 +1083,10 @@ def _run_planner():
     finally:
         _building_lock.release()
         # ── Auto-trigger: agar build ke dauran naye items aaye toh ──
-        from bulletin_builder import load_metadata, BULLETINS_DIR
         try:
-            all_meta = load_metadata()
-            pending = sum(1 for v in all_meta.values() if not v.get('used_count',0) == 0)
+            import db as _db_pending
+            _row = _db_pending.fetchall("SELECT COUNT(*) AS n FROM news_items WHERE used_count = 0")
+            pending = int(_row[0]["n"]) if _row else 0
             if pending > 0:
                 logger.info(f"🔄 Post-build: {pending} items pending — auto-triggering next build")
                 threading.Thread(target=_run_planner, daemon=True).start()
@@ -1332,7 +1334,6 @@ def cleanup_old_data_loop():
             from bulletin_builder import (
                 BULLETINS_DIR,
                 load_metadata,
-                save_metadata,
                 _metadata_lock,
             )
         except ImportError as e:
@@ -1411,11 +1412,13 @@ def cleanup_old_data_loop():
         # ══════════════════════════════════════════════════════════════════════
         if old_items:
             try:
-                with _metadata_lock:
-                    save_metadata(keep_items)
-                logger.info(f"✅ metadata.json updated — {len(old_items)} entries removed")
+                # with _metadata_lock:
+                #     save_metadata(keep_items)
+                old_counters = [item.get("counter") for item in old_items if item.get("counter") is not None]
+                delete_news_items(old_counters)
+                logger.info(f"✅ DB updated — {len(old_items)} news_items deleted")
             except Exception as e:
-                logger.warning(f"⚠️ metadata.json save failed: {e}")
+                logger.warning(f"⚠️ DB delete failed: {e}")
 
         # ══════════════════════════════════════════════════════════════════════
         # STEP 4 — outputs/scripts/, headlines/, audios/ leftover files
@@ -1733,72 +1736,69 @@ def local_incident_post():
 
 @app.route('/api/feed', methods=['GET'])
 def local_incident_get():
-    import sqlite3
-    import os
-    
+    # ── SQLite version (commented out — replaced by PostgreSQL/CloudSQL) ──────
+    # import sqlite3, os
+    # db_path = os.path.join(os.path.dirname(__file__), 'item_events.db')
+    # conn = sqlite3.connect(db_path)
+    # conn.row_factory = sqlite3.Row
+    # cursor = conn.cursor()
+    # cursor.execute("SELECT COUNT(*) as total FROM incidents")
+    # cursor.execute("SELECT * FROM incidents ORDER BY received_at DESC LIMIT ? OFFSET ?", (limit, offset))
+    # rows = cursor.fetchall()
+    # conn.close()
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # ── PostgreSQL/CloudSQL version ───────────────────────────────────────────
     try:
-        # Database path
-        db_path = os.path.join(os.path.dirname(__file__), 'item_events.db')
-        
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
+        import db
+
+        page   = int(request.args.get('page', 1))
+        limit  = int(request.args.get('limit', 20))
         offset = (page - 1) * limit
-        
-        # Connect to database
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        # Get total count
-        cursor.execute("SELECT COUNT(*) as total FROM incidents")
-        total_row = cursor.fetchone()
-        total = total_row['total'] if total_row else 0
-        
-        # Get paginated data
-        cursor.execute("""
-            SELECT * FROM incidents 
-            ORDER BY received_at DESC 
-            LIMIT ? OFFSET ?
+
+        total_row = db.fetchall("SELECT COUNT(*) as total FROM incidents")
+        total     = total_row[0]['total'] if total_row else 0
+
+        rows = db.fetchall("""
+            SELECT * FROM incidents
+            ORDER BY received_at DESC
+            LIMIT %s OFFSET %s
         """, (limit, offset))
-        
-        rows = cursor.fetchall()
-        data = []
-        for row in rows:
-            data.append({
-                'id': row['id'],
-                'incident_id': row['incident_id'],
-                'title': row['title'],
-                'description': row['description'],
-                'category_id': row['category_id'],
-                'location_id': row['location_id'],
-                'post_location': row['post_location'],
-                'user_id': row['user_id'],
-                'timestamp': row['timestamp'],
+
+        data = [
+            {
+                'id':               row['id'],
+                'incident_id':      row['incident_id'],
+                'title':            row['title'],
+                'description':      row['description'],
+                'category_id':      row['category_id'],
+                'location_id':      row['location_id'],
+                'post_location':    row['post_location'],
+                'user_id':          row['user_id'],
+                'timestamp':        row['timestamp'],
                 'cover_image_path': row['cover_image_path'],
-                'video_path': row['video_path'],
-                'segments_path': row['segments_path'],
-                'counter': row['counter'],
-                'received_at': row['received_at']
-            })
-        
-        conn.close()
-        
+                'video_path':       row['video_path'],
+                'segments_path':    row['segments_path'],
+                'counter':          row['counter'],
+                'received_at':      row['received_at'],
+            }
+            for row in rows
+        ]
+
         return jsonify({
             'status': 'ok',
-            'total': total,
-            'page': page,
-            'limit': limit,
-            'data': data
+            'total':  total,
+            'page':   page,
+            'limit':  limit,
+            'data':   data
         }), 200
-        
+
     except Exception as e:
         logger.error(f"GET API Error: {e}")
         import traceback
-        traceback.print_exc()  # This will print full error in console
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    # ─────────────────────────────────────────────────────────────────────────
 
 ##### ── 08-04-15-43 ────────────────────────────────────────────────────
 

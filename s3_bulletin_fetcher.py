@@ -11,6 +11,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from typing import List, Optional
 
 from config import (
+    S3_BUCKET_NAME,
     S3_BUCKET_NAME_M,
     S3_BULLETIN_PREFIX,
     S3_REGION,
@@ -19,18 +20,28 @@ from config import (
 
 
 def _s3_client():
+    """Own bucket client (ads, static assets, bulletins)."""
+    return boto3.client(
+        's3',
+        region_name=os.getenv('AWS_REGION', S3_REGION),
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+    )
+
+def _s3_client_m():
+    """Meghna's bucket client (whoiswho, vege, trainroutes)."""
     return boto3.client(
         's3',
         region_name=S3_REGION,
-        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID_M'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY_M'),
     )
 
 
 def list_s3_bulletins() -> list:
     """S3 prefix ke andar saare .mp4 files list karo."""
     try:
-        s3  = _s3_client()
+        s3  = _s3_client_m()
         res = s3.list_objects_v2(Bucket=S3_BUCKET_NAME_M, Prefix=S3_BULLETIN_PREFIX)
         keys = [
             obj['Key']
@@ -104,7 +115,7 @@ def fetch_random_s3_bulletin() -> Optional[str]:
     # Download karo
     print(f"  [S3-INJECT] ⬇️  Downloading s3://{S3_BUCKET_NAME_M}/{chosen_key} ...")
     try:
-        s3 = _s3_client()
+        s3 = _s3_client_m()
         s3.download_file(S3_BUCKET_NAME_M, chosen_key, local_path)
         size_mb = os.path.getsize(local_path) / (1024 * 1024)
         print(f"  [S3-INJECT] ✅ Downloaded → {filename} ({size_mb:.1f} MB)")
@@ -120,7 +131,7 @@ def fetch_random_s3_bulletin() -> Optional[str]:
 
 def fetch_whoiswho_bulletin() -> Optional[str]:
     try:
-        s3  = _s3_client()
+        s3  = _s3_client_m()
         res = s3.list_objects_v2(Bucket=S3_BUCKET_NAME_M, Prefix='whoiswho/outputs/')
         mp4_files = [obj for obj in res.get('Contents', [])
                      if obj['Key'].endswith('.mp4') and obj['Size'] > 0]
@@ -142,10 +153,33 @@ def fetch_whoiswho_bulletin() -> Optional[str]:
         return None
 
 
+# def fetch_ad_clips() -> List[Optional[str]]:  # duplicate — commented out
+#     try:
+#         s3  = _s3_client()
+#         res = s3.list_objects_v2(Bucket=S3_BUCKET_NAME_M, Prefix='ads/outputs/')
+#         mp4_files = [obj for obj in res.get('Contents', [])
+#                      if obj['Key'].endswith('.mp4') and obj['Size'] > 0]
+#         if not mp4_files:
+#             print("  [AD-INJECT] ⚠️ No clips found")
+#             return []
+#         local_paths = []
+#         for obj in mp4_files:
+#             local_path = os.path.join(S3_INJECT_LOCAL_DIR, os.path.basename(obj['Key']))
+#             if not (os.path.exists(local_path) and os.path.getsize(local_path) > 100_000):
+#                 s3.download_file(S3_BUCKET_NAME_M, obj['Key'], local_path)
+#                 print(f"  [AD-INJECT] ✅ Downloaded: {os.path.basename(local_path)}")
+#             else:
+#                 print(f"  [AD-INJECT] ✅ Cache hit: {os.path.basename(local_path)}")
+#             local_paths.append(local_path)
+#         return local_paths
+#     except (BotoCoreError, ClientError) as e:
+#         print(f"  [AD-INJECT] ❌ Error: {e}")
+#         return []
+
 def fetch_ad_clips() -> List[Optional[str]]:
     try:
         s3  = _s3_client()
-        res = s3.list_objects_v2(Bucket=S3_BUCKET_NAME_M, Prefix='ads/outputs/')
+        res = s3.list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix='ads/outputs/')
         mp4_files = [obj for obj in res.get('Contents', [])
                      if obj['Key'].endswith('.mp4') and obj['Size'] > 0]
         if not mp4_files:
@@ -155,34 +189,12 @@ def fetch_ad_clips() -> List[Optional[str]]:
         for obj in mp4_files:
             local_path = os.path.join(S3_INJECT_LOCAL_DIR, os.path.basename(obj['Key']))
             if not (os.path.exists(local_path) and os.path.getsize(local_path) > 100_000):
-                s3.download_file(S3_BUCKET_NAME_M, obj['Key'], local_path)
+                s3.download_file(S3_BUCKET_NAME, obj['Key'], local_path)
                 print(f"  [AD-INJECT] ✅ Downloaded: {os.path.basename(local_path)}")
             else:
                 print(f"  [AD-INJECT] ✅ Cache hit: {os.path.basename(local_path)}")
             local_paths.append(local_path)
-        return local_paths
-    except (BotoCoreError, ClientError) as e:
-        print(f"  [AD-INJECT] ❌ Error: {e}")
-        return []
-    
-def fetch_ad_clips() -> List[Optional[str]]:
-    try:
-        s3  = _s3_client()
-        res = s3.list_objects_v2(Bucket=S3_BUCKET_NAME_M, Prefix='ads/outputs/')
-        mp4_files = [obj for obj in res.get('Contents', [])
-                     if obj['Key'].endswith('.mp4') and obj['Size'] > 0]
-        if not mp4_files:
-            print("  [AD-INJECT] ⚠️ No clips found")
-            return []
-        local_paths = []
-        for obj in mp4_files:
-            local_path = os.path.join(S3_INJECT_LOCAL_DIR, os.path.basename(obj['Key']))
-            if not (os.path.exists(local_path) and os.path.getsize(local_path) > 100_000):
-                s3.download_file(S3_BUCKET_NAME_M, obj['Key'], local_path)
-                print(f"  [AD-INJECT] ✅ Downloaded: {os.path.basename(local_path)}")
-            else:
-                print(f"  [AD-INJECT] ✅ Cache hit: {os.path.basename(local_path)}")
-            local_paths.append(local_path)
+        random.shuffle(local_paths)
         return local_paths
     except (BotoCoreError, ClientError) as e:
         print(f"  [AD-INJECT] ❌ Error: {e}")
