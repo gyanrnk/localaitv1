@@ -1,25 +1,23 @@
-"""
-Message Queue Manager - Handles pending messages with text/audio-media matching
-Text/Audio waits for media (image/video/audio), media waits for text/audio.
-Both sides queue and pair up within timeout.
-"""
 import time
 from collections import defaultdict
 from typing import Optional, Dict
 import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class MessageQueue:
     """Queue system to match text/audio with media for each user"""
     
-    def __init__(self, text_wait_timeout=30):
+    def __init__(self, text_wait_timeout=10):
         """
         Args:
             text_wait_timeout: Seconds each side waits for the other (default: 30)
         """
         self.pending_media = defaultdict(list)
         self.pending_text = defaultdict(list)
-        self.pending_audio = defaultdict(list)  # NEW: for user-provided audio
+        self.pending_audio = defaultdict(list)
         self.text_wait_timeout = text_wait_timeout
         self.lock = threading.Lock()
         self.processed_messages = {}
@@ -33,13 +31,14 @@ class MessageQueue:
         caption = data.get('text', '')
         return f"{message_type}:{url}:{caption}"
 
-    def add_message(self, sender: str, message_type: str, data: dict, message_id: str = None) -> Optional[Dict]:
+    def add_message(self, sender: str, message_type: str, data: dict, message_id: str = None, sender_name: str = '') -> Optional[Dict]:
         with self.lock:
             current_time = time.time()
             if not isinstance(data, dict):
                 data = {}
             data['timestamp'] = current_time
             data['sender'] = sender
+            data['sender_name'] = sender_name  # [FIX] sender display name store karo
 
             if message_id:
                 dedup_key = f"{sender}:id:{message_id}"
@@ -48,13 +47,16 @@ class MessageQueue:
 
             if dedup_key in self.processed_messages:
                 if current_time - self.processed_messages[dedup_key] < 3600:
-                    print(f"⭕ Duplicate skipped for {sender} [{message_type}]")
+                    logger.warning(f"⭕ Duplicate skipped for {sender} [{message_type}]")
                     return {'duplicate': True, 'sender': sender}
 
             self.processed_messages[dedup_key] = current_time
 
             # Media arriving (image/video)
             if message_type in ['image', 'video']:
+                logger.info(f"📸 Media arrived [{message_type}] for {sender}")
+                logger.info(f"   pending_text={len(self.pending_text[sender])}, pending_audio={len(self.pending_audio[sender])}")
+                
                 # Check for waiting user-audio first
                 if self.pending_audio[sender]:
                     audio_data = self.pending_audio[sender].pop(0)
@@ -62,66 +64,76 @@ class MessageQueue:
                     if self.pending_text[sender]:
                         text_data = self.pending_text[sender].pop(0)
                     
-                    print(f"✅ Media arrived, paired with waiting user-audio for {sender}")
+                    logger.info(f"✅ MATCHED: Media + Audio for {sender}")
                     return {
                         'text': text_data.get('text') if text_data else None,
                         'media': data,
                         'user_audio': audio_data,
-                        'sender': sender
+                        'sender': sender,
+                        'sender_name': sender_name
                     }
                 # Check for waiting text
                 elif self.pending_text[sender]:
                     text_data = self.pending_text[sender].pop(0)
-                    print(f"✅ Media arrived, paired with waiting text for {sender}")
+                    logger.info(f"✅ MATCHED: Media + Text for {sender}")
                     return {
                         'text': text_data.get('text'),
                         'media': data,
                         'user_audio': None,
-                        'sender': sender
+                        'sender': sender,
+                        'sender_name': sender_name
                     }
                 else:
                     self.pending_media[sender].append(data)
-                    print(f"⏳ Media queued, waiting for text/audio from {sender}")
+                    logger.info(f"⏳ Media queued, waiting for text/audio from {sender}")
                     return None
 
             # User-provided audio arriving
             elif message_type == 'user_audio':
+                logger.info(f"🎙️ Audio arrived for {sender}")
+                logger.info(f"   pending_media={len(self.pending_media[sender])}, pending_text={len(self.pending_text[sender])}")
+                
                 if self.pending_media[sender]:
                     media_data = self.pending_media[sender].pop(0)
                     text_data = None
                     if self.pending_text[sender]:
                         text_data = self.pending_text[sender].pop(0)
                     
-                    print(f"✅ User-audio arrived, paired with waiting media for {sender}")
+                    logger.info(f"✅ MATCHED: Audio + Media for {sender}")
                     return {
                         'text': text_data.get('text') if text_data else None,
                         'media': media_data,
                         'user_audio': data,
-                        'sender': sender
+                        'sender': sender,
+                        'sender_name': sender_name
                     }
                 else:
                     self.pending_audio[sender].append(data)
-                    print(f"⏳ User-audio queued, waiting for media from {sender}")
+                    logger.info(f"⏳ Audio queued, waiting for media from {sender}")
                     return None
 
             # Text arriving
             elif message_type == 'text':
+                logger.info(f"📝 Text arrived for {sender}")
+                logger.info(f"   pending_media={len(self.pending_media[sender])}, pending_audio={len(self.pending_audio[sender])}")
+                
                 if self.pending_media[sender]:
                     media_data = self.pending_media[sender].pop(0)
                     audio_data = None
                     if self.pending_audio[sender]:
                         audio_data = self.pending_audio[sender].pop(0)
                     
-                    print(f"✅ Text arrived, paired with waiting media for {sender}")
+                    logger.info(f"✅ MATCHED: Text + Media for {sender}")
                     return {
                         'text': data.get('text'),
                         'media': media_data,
                         'user_audio': audio_data,
-                        'sender': sender
+                        'sender': sender,
+                        'sender_name': sender_name
                     }
                 else:
                     self.pending_text[sender].append(data)
-                    print(f"⏳ Text queued, waiting for media from {sender}")
+                    logger.info(f"⏳ Text queued, waiting for media from {sender}")
                     return None
 
             return None
@@ -129,8 +141,12 @@ class MessageQueue:
     def get_expired_media(self) -> list:
         """
         Returns media that waited longer than timeout.
-        Video without text/audio allowed (extract audio from video).
-        Image without text/audio is discarded.
+        
+        NEW RULES:
+        - Video WITH text/audio → ✅ Process
+        - Video WITHOUT text/audio → ✅ Pass to background worker (will check voice there)
+        - Image WITH text/audio → ✅ Process
+        - Image WITHOUT text/audio → ❌ Skip
         """
         with self.lock:
             expired = []
@@ -142,17 +158,24 @@ class MessageQueue:
                         media_type = msg.get('type', 'image')
                         has_content = msg.get('text') or self.pending_audio[sender]
                         
-                        # Allow video even without text/audio (will extract from video)
-                        # Skip image-only
-                        if media_type == 'video' or has_content:
+                        # Process if has content OR is video (voice check happens later)
+                        if has_content or media_type == 'video':
                             audio_data = self.pending_audio[sender].pop(0) if self.pending_audio[sender] else None
+                            
+                            if has_content:
+                                logger.info(f"⏰ Expired {media_type} with content → processing")
+                            else:
+                                logger.info(f"⏰ Expired video-only → will check for human voice")
+                            
                             expired.append({
                                 'sender': sender,
                                 'media': msg,
                                 'user_audio': audio_data
                             })
                         else:
-                            print(f"⏭️ Skipping image-only (no text/audio) for {sender}")
+                            # Image-only → skip
+                            logger.info(f"⏭️ Skipping image-only (no text/audio) for {sender}")
+                        
                         messages.remove(msg)
 
             return expired
@@ -169,7 +192,7 @@ class MessageQueue:
             for sender, messages in list(self.pending_text.items()):
                 for msg in messages[:]:
                     if current_time - msg['timestamp'] > self.text_wait_timeout:
-                        print(f"⏰ Text timeout for {sender}, processing as text-only")
+                        logger.info(f"⏰ Expired text for {sender} → processing as text-only")
                         expired.append({'sender': sender, 'text_data': msg})
                         messages.remove(msg)
 
@@ -183,6 +206,7 @@ class MessageQueue:
                 del self.pending_text[sender]
             if sender in self.pending_audio:
                 del self.pending_audio[sender]
+            logger.info(f"🧹 Queue cleared for {sender}")
 
     def get_queue_status(self) -> dict:
         with self.lock:

@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
-
+import threading 
 from config import (
     BASE_INPUT_DIR, BASE_OUTPUT_DIR,
     INPUT_IMAGE_DIR, INPUT_VIDEO_DIR, INPUT_AUDIO_DIR,
@@ -41,6 +41,7 @@ class FileManager:
     """Manage file storage with proper naming conventions"""
     
     def __init__(self):
+        self._lock = threading.Lock()  # ← add as first line
         self._ensure_directories()
         self.counters = self._load_counters()
     
@@ -53,6 +54,25 @@ class FileManager:
         ]
         for directory in directories:
             os.makedirs(directory, exist_ok=True)
+    
+    def _wrap_headline(text: str, max_chars: int = 20) -> str:
+        words = text.split()
+        lines, current = [], ""
+        for word in words:
+            if len(current) + len(word) + 1 <= max_chars:
+                current = (current + " " + word).strip()
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+
+        # ← Agar 3 se zyada lines hain to last line mein merge karo, words drop mat karo
+        if len(lines) > 3:
+            lines = lines[:2] + [" ".join(lines[2:])]
+
+        return "\n".join(lines)
     
     def _load_counters(self) -> dict:
         """Load existing file counters by finding the highest-numbered file in each dir"""
@@ -89,7 +109,7 @@ class FileManager:
         return None
     
     def save_input_media(self, file_path: str) -> Optional[dict]:
-        """Save input media file with proper naming"""
+        """Save single input media file"""
         if not os.path.exists(file_path):
             print(f"File not found: {file_path}")
             return None
@@ -98,21 +118,21 @@ class FileManager:
         if not file_type:
             print(f"Unsupported file type: {file_path}")
             return None
-        
-        self.counters[file_type] += 1
-        counter = self.counters[file_type]
-        
+
+        with self._lock:
+            self.counters[file_type] += 1
+            counter = self.counters[file_type]
+
         ext = Path(file_path).suffix.lower()
         prefix_map = {
             'image': (PREFIX_IMAGE, INPUT_IMAGE_DIR),
             'video': (PREFIX_VIDEO, INPUT_VIDEO_DIR),
             'audio': (PREFIX_AUDIO, INPUT_AUDIO_DIR)
         }
-        
         prefix, target_dir = prefix_map[file_type]
         new_filename = f"{prefix}{counter}{ext}"
         new_path = os.path.join(target_dir, new_filename)
-        
+
         try:
             shutil.copy2(file_path, new_path)
             print(f"✅ Saved {file_type}: {new_filename}")
@@ -120,11 +140,82 @@ class FileManager:
                 'type': file_type,
                 'input_path': new_path,
                 'filename': new_filename,
-                'counter': counter
+                'counter': counter,
+                'media_files': [new_filename]   # ← list format for consistency
             }
         except Exception as e:
             print(f"Error saving file: {e}")
             return None
+
+
+    def save_input_media_list(self, file_paths: list) -> Optional[dict]:
+        """
+        Save multiple media files (max 3) for a single news item.
+        All files must be same type (all images OR all videos).
+        Files saved as: vi4_1.mp4, vi4_2.mp4, vi4_3.mp4
+
+        Returns dict with:
+            type, counter, media_files (list of filenames), input_paths (list)
+        """
+        if not file_paths:
+            return None
+
+        file_paths = file_paths[:3]  # max 3
+
+        # Validate all same type
+        types = [self._get_file_type(p) for p in file_paths if os.path.exists(p)]
+        if not types:
+            print("No valid files found")
+            return None
+        if len(set(types)) > 1:
+            print(f"Mixed media types not allowed: {set(types)}")
+            return None
+
+        file_type = types[0]
+        prefix_map = {
+            'image': (PREFIX_IMAGE, INPUT_IMAGE_DIR),
+            'video': (PREFIX_VIDEO, INPUT_VIDEO_DIR),
+            'audio': (PREFIX_AUDIO, INPUT_AUDIO_DIR)
+        }
+        prefix, target_dir = prefix_map[file_type]
+
+        with self._lock:
+            self.counters[file_type] += 1
+            counter = self.counters[file_type]
+
+        saved_filenames = []
+        saved_paths = []
+
+        for idx, file_path in enumerate(file_paths, start=1):
+            if not os.path.exists(file_path):
+                print(f"⚠️ Skipping missing file: {file_path}")
+                continue
+            ext = Path(file_path).suffix.lower()
+            # single file → vi4.mp4, multiple → vi4_1.mp4, vi4_2.mp4
+            if len(file_paths) == 1:
+                new_filename = f"{prefix}{counter}{ext}"
+            else:
+                new_filename = f"{prefix}{counter}_{idx}{ext}"
+            new_path = os.path.join(target_dir, new_filename)
+            try:
+                shutil.copy2(file_path, new_path)
+                saved_filenames.append(new_filename)
+                saved_paths.append(new_path)
+                print(f"✅ Saved {file_type} [{idx}/{len(file_paths)}]: {new_filename}")
+            except Exception as e:
+                print(f"Error saving {file_path}: {e}")
+
+        if not saved_filenames:
+            return None
+
+        return {
+            'type': file_type,
+            'counter': counter,
+            'input_path': saved_paths[0],       # backward compat
+            'filename': saved_filenames[0],      # backward compat
+            'media_files': saved_filenames,      # ← new: full list
+            'input_paths': saved_paths,          # ← new: full list
+        }
     
     def save_outputs(self, script: str, headline: str, media_counter: int,
                      media_type: str, audio_data_or_path: Optional[str] = None,
@@ -231,5 +322,3 @@ class FileManager:
             if os.path.exists(path):
                 return path
         return None
-
-

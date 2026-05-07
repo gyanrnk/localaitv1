@@ -1,0 +1,28 @@
+[Unit]
+Description=Telugu News Bot - WhatsApp to Video Pipeline
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/localaitv1
+Environment="PATH=/root/localaitv1/env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/root/localaitv1/env/bin/python webhook_server.py
+
+Restart=always
+RestartSec=10
+StartLimitInterval=0
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=newsbot
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

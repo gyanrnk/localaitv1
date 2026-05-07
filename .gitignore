@@ -1,0 +1,57 @@
+# --- Security & Environment ---
+.env
+*.log
+*.mov
+
+# --- Python Specific ---
+.venv/*
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.zip
+# --- OS Specific (macOS) ---
+.DS_Store
+Thumbs.db
+
+# --- Editor Specific ---
+.vscode/
+.idea/
+*.tmp
+
+# --- Media & Assets ---
+# Note: Usually better to host these on a CDN/Cloud Storage
+*.mp3
+*.mp4
+*.jpg
+*.jpeg
+*.png
+*.json
+*.txt
+*.filter
+*.last_cleanup
+
+img/
+outputs/
+metadata.json
+inputs/
+
+debug_report.json
+processed_report_ids.json
+report_state.json
+report_state.json
+item_events.db
+news_bulletin.db
+metadata.json
+tesst.py
+
+# Celery
+celerybeat-schedule*
+*.log
+
+assets/ads1/"*.mpeg" 
+__pycache__/
+*.pyc
+.last_cleanup
+*.mpeg
+docker-compose.workers.yml
