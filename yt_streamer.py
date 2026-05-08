@@ -32,29 +32,17 @@ INTRO_SEC = 20
 
 # ── Per-channel bulletin directories ─────────────────────────────────────────
 if platform.system() == "Windows":
-    _BASE             = os.getenv("WATCH_DIR_BASE", r"C:\\Users\\Gyanaranjan kabi\\Desktop\\temp_copy\\outputs\\bulletins")
-    WATCH_DIR_KHAMMAM = os.getenv("WATCH_DIR_KHAMMAM", _BASE + r"\\Khammam")
-    WATCH_DIR_KURNOOL = os.getenv("WATCH_DIR_KURNOOL", _BASE + r"\\Kurnool")
-    WATCH_DIR_KARIMNAGAR = os.getenv("WATCH_DIR_KARIMNAGAR", _BASE + "/Karimnagar")
-
+    _BASE = os.getenv("WATCH_DIR_BASE", r"C:\\Users\\Gyanaranjan kabi\\Desktop\\temp_copy\\outputs\\bulletins")
 else:
-    _BASE             = os.getenv("WATCH_DIR_BASE", "/root/localaitv1/outputs/bulletins")
-    WATCH_DIR_KHAMMAM = os.getenv("WATCH_DIR_KHAMMAM", _BASE + "/Khammam")
-    WATCH_DIR_KURNOOL = os.getenv("WATCH_DIR_KURNOOL", _BASE + "/Kurnool")
-    WATCH_DIR_KARIMNAGAR = os.getenv("WATCH_DIR_KARIMNAGAR", _BASE + "/Karimnagar")
+    _BASE = os.getenv("WATCH_DIR_BASE", "/root/localaitv1/outputs/bulletins")
 
-print("BASE:", _BASE)
-print("KHAMMAM:", WATCH_DIR_KHAMMAM)
-print("KURNOOL:", WATCH_DIR_KURNOOL)
-#   LocalAiTV  ←  Khammam  ←  YT_STREAM_KEY
-#   KurnoolTV  ←  Kurnool   ←  YT_STREAM_KEY_KURNOOL
-RTMPS_URL          = "rtmps://a.rtmps.youtube.com/live2"
-STREAM_KEY         = os.getenv("YT_STREAM_KEY")
-STREAM_KEY_KURNOOL = os.getenv("YT_STREAM_KEY_KURNOOL")
-STREAM_KEY_KARIMNAGAR = os.getenv("YT_STREAM_KEY_KARIMNAGAR")
-IST                = pytz.timezone("Asia/Kolkata")
-YT_API_KEY         = os.getenv("YT_DATA_API_KEY")
-YT_VIDEO_ID        = os.getenv("YT_VIDEO_ID")
+def _wdir(name):
+    return os.getenv(f"WATCH_DIR_{name.upper()}", f"{_BASE}/{name}")
+
+RTMPS_URL = "rtmps://a.rtmps.youtube.com/live2"
+IST       = pytz.timezone("Asia/Kolkata")
+YT_API_KEY  = os.getenv("YT_DATA_API_KEY")
+YT_VIDEO_ID = os.getenv("YT_VIDEO_ID")
 
 MAX_BULLETINS_IN_ROTATION = 30
 VIEWER_COUNT_FILE         = Path("yt_viewers.txt")
@@ -62,13 +50,22 @@ VIEWER_COUNT_FILE_FFMPEG  = "yt_viewers.txt"
 IST_TIME_FILE             = Path("ist_time.txt")
 IST_TIME_FILE_FFMPEG      = "ist_time.txt"
 VIEWER_FETCH_INTERVAL     = 30
-
-# Per-stream concat files — never shared, so a p1 restart never disrupts p2
-CONCAT_LIST_P1 = Path("concat_list_p1.txt")   # Khammam / LocalAiTV
-CONCAT_LIST_P2 = Path("concat_list_p2.txt")   # Kurnool  / KurnoolTV
-CONCAT_LIST_P3 = Path("concat_list_p3.txt")   # Karimnagar / KarimnagarTV
 DRY_RUN      = False
-STREAM_COUNT = int(os.getenv("STREAM_COUNT", "2"))
+STREAM_COUNT = int(os.getenv("STREAM_COUNT", "3"))
+
+# ── Channel definitions — add new channels here only ─────────────────────────
+CHANNEL_DEFS = [
+    {"name": "Khammam",    "label": "LocalAiTV",    "key_env": "YT_STREAM_KEY",            "concat": Path("concat_list_p1.txt")},
+    {"name": "Kurnool",    "label": "KurnoolTV",    "key_env": "YT_STREAM_KEY_KURNOOL",    "concat": Path("concat_list_p2.txt")},
+    {"name": "Karimnagar", "label": "KarimnagarTV", "key_env": "YT_STREAM_KEY_KARIMNAGAR", "concat": Path("concat_list_p3.txt")},
+    {"name": "Anatpur",    "label": "AnatpurTV",    "key_env": "YT_STREAM_KEY_ANATPUR",    "concat": Path("concat_list_p4.txt")},
+    {"name": "Kakinada",   "label": "KakinadaTV",   "key_env": "YT_STREAM_KEY_KAKINADA",   "concat": Path("concat_list_p5.txt")},
+    {"name": "Nalore",     "label": "NaloreTV",     "key_env": "YT_STREAM_KEY_NALORE",     "concat": Path("concat_list_p6.txt")},
+    {"name": "Tirupati",   "label": "TirupatiTV",   "key_env": "YT_STREAM_KEY_TIRUPATI",   "concat": Path("concat_list_p7.txt")},
+]
+for _ch in CHANNEL_DEFS:
+    _ch["watch_dir"] = _wdir(_ch["name"])
+    _ch["stream_key"] = os.getenv(_ch["key_env"])
 
 INJECT_MAX_SEC = 5 * 60  # 5 minutes
 
@@ -563,58 +560,43 @@ def _exit_reason(rc):
 #     return p1, p2, bk, bn
 
 def _launch_streams(inject_type=None, inject_payload=None):
-    # bk  = get_all_bulletins(WATCH_DIR_KHAMMAM)   or get_all_bulletins(_BASE)
-    # bn  = get_all_bulletins(WATCH_DIR_KURNOOL)    or get_all_bulletins(_BASE)
-    # bkr = get_all_bulletins(WATCH_DIR_KARIMNAGAR) or get_all_bulletins(_BASE)
-    MIN_BULLETINS = 5   # isse kam ho to root fallback merge karo
+    MIN_BULLETINS = 5
 
     def _with_fallback(folder):
         primary = get_all_bulletins(folder)
         if len(primary) >= MIN_BULLETINS:
             return primary
         fallback = get_all_bulletins(_BASE)
-        # primary + fallback merge, dedupe by path
-        seen = set()
-        merged = []
+        seen, merged = set(), []
         for f in primary + fallback:
             if str(f) not in seen:
-                seen.add(str(f))
-                merged.append(f)
+                seen.add(str(f)); merged.append(f)
         return merged
 
-    bk  = _with_fallback(WATCH_DIR_KHAMMAM)
-    bn  = _with_fallback(WATCH_DIR_KURNOOL)
-    bkr = _with_fallback(WATCH_DIR_KARIMNAGAR)
-
-    if not bk:  debug("[LocalAiTV] No Khammam bulletins")
-    if not bn:  debug("[KurnoolTV] No Kurnool bulletins")
-    if not bkr: debug("[KarimngarTV] No Karimnagar bulletins")
-
+    active = CHANNEL_DEFS[:STREAM_COUNT]
+    procs  = []
     prepare_overlay()
 
-    build_concat_list(bk,  CONCAT_LIST_P1, "LocalAiTV",    inject_type, inject_payload)
-    if STREAM_COUNT >= 2 and STREAM_KEY_KURNOOL:
-        build_concat_list(bn,  CONCAT_LIST_P2, "KurnoolTV",    inject_type, inject_payload)
-    if STREAM_COUNT >= 3 and STREAM_KEY_KARIMNAGAR:
-        build_concat_list(bkr, CONCAT_LIST_P3, "KarimngarTV",  inject_type, inject_payload)
+    for i, ch in enumerate(active):
+        bulletins = _with_fallback(ch["watch_dir"])
+        if not bulletins:
+            debug(f"[{ch['label']}] No bulletins")
+        inj_t = inject_type    if i == 0 else None
+        inj_p = inject_payload if i == 0 else None
+        build_concat_list(bulletins, ch["concat"], ch["label"], inj_t, inj_p)
+        p = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"]) \
+            if (bulletins and ch["stream_key"]) else None
+        if p:
+            monitor_ffmpeg(p, ch["label"])
+        procs.append(p)
 
-    p1 = start_ffmpeg_concat(STREAM_KEY,           "LocalAiTV",   CONCAT_LIST_P1) if bk  else None
-    p2 = (start_ffmpeg_concat(STREAM_KEY_KURNOOL,   "KurnoolTV",   CONCAT_LIST_P2)
-          if (STREAM_COUNT >= 2 and STREAM_KEY_KURNOOL and bn)   else None)
-    p3 = (start_ffmpeg_concat(STREAM_KEY_KARIMNAGAR,"KarimngarTV", CONCAT_LIST_P3)
-          if (STREAM_COUNT >= 3 and STREAM_KEY_KARIMNAGAR and bkr) else None)
-
-    if p1: monitor_ffmpeg(p1, "LocalAiTV")
-    if p2: monitor_ffmpeg(p2, "KurnoolTV")
-    if p3: monitor_ffmpeg(p3, "KarimngarTV")
-    return p1, p2, p3, bk, bn, bkr
+    return procs
 
 
-
-def _terminate_streams(p1, p2, p3):
-    for proc, label in [(p1,"LocalAiTV"),(p2,"KurnoolTV"),(p3,"KarimngarTV")]:
+def _terminate_streams(procs):
+    for proc, ch in zip(procs, CHANNEL_DEFS):
         if proc and proc.poll() is None:
-            try: proc.terminate(); stream_down(label)
+            try: proc.terminate(); stream_down(ch["label"])
             except: pass
 
 
@@ -624,41 +606,33 @@ def run_streamer():
     kill_ffmpeg()
     time.sleep(2)
     debug("=== Streamer Started ===")
-    debug(f"Khammam (LocalAiTV) : {WATCH_DIR_KHAMMAM}")
-    debug(f"Kurnool  (KurnoolTV) : {WATCH_DIR_KURNOOL}")
-    debug(f"Karimnagar (KarimngarTV) : {WATCH_DIR_KARIMNAGAR}")
+    for ch in CHANNEL_DEFS[:STREAM_COUNT]:
+        debug(f"  {ch['label']} ← {ch['watch_dir']}")
 
-    if not STREAM_KEY:
+    if not CHANNEL_DEFS[0]["stream_key"]:
         raise RuntimeError("YT_STREAM_KEY not set!")
 
     start_background_threads()
 
-    # p1 = p2 = None
-    # last_kh = last_ku = []
-    p1 = p2 = p3 = None
-    last_kh = last_ku = last_kr = []
-
-    last_check     = time.time()
-    inject_type    = None
-    inject_payload = None
+    active     = CHANNEL_DEFS[:STREAM_COUNT]
+    procs      = [None] * STREAM_COUNT
+    last_buls  = [[] for _ in active]
+    last_check = time.time()
+    inject_type = inject_payload = None
 
     try:
         while True:
-            # bk = get_all_bulletins(WATCH_DIR_KHAMMAM)
-            # bn = get_all_bulletins(WATCH_DIR_KURNOOL)
-            # bkr = get_all_bulletins(WATCH_DIR_KARIMNAGAR)
-            bk  = get_all_bulletins(WATCH_DIR_KHAMMAM)   or get_all_bulletins(_BASE)
-            bn  = get_all_bulletins(WATCH_DIR_KURNOOL)    or get_all_bulletins(_BASE)
-            bkr = get_all_bulletins(WATCH_DIR_KARIMNAGAR) or get_all_bulletins(_BASE)
+            cur_buls = [get_all_bulletins(ch["watch_dir"]) or get_all_bulletins(_BASE)
+                        for ch in active]
 
-            if not bk and not bn and not bkr:
-                debug("No bulletins in either folder — 10s wait...")
-                time.sleep(10)
-                continue
-            debug(f"KURNOOL CHECK → STREAM_COUNT={STREAM_COUNT}, KEY={bool(STREAM_KEY_KURNOOL)}, FILES={len(bn)}")
-            p1, p2, p3, last_kh, last_ku, last_kr = _launch_streams(inject_type, inject_payload)
+            if not any(cur_buls):
+                debug("No bulletins in any folder — 10s wait...")
+                time.sleep(10); continue
+
+            procs      = _launch_streams(inject_type, inject_payload)
+            last_buls  = cur_buls
+            last_check = time.time()
             inject_type = inject_payload = None
-            last_check  = time.time()
 
             while True:
                 time.sleep(10)
@@ -668,57 +642,43 @@ def run_streamer():
                     seg_type, payload = pending
                     if seg_type == "news":
                         debug("News slot — silent refresh")
-                        last_kh = get_all_bulletins(WATCH_DIR_KHAMMAM)   or get_all_bulletins(_BASE)
-                        last_ku = get_all_bulletins(WATCH_DIR_KURNOOL)    or get_all_bulletins(_BASE)
-                        last_kr = get_all_bulletins(WATCH_DIR_KARIMNAGAR) or get_all_bulletins(_BASE)
-
+                        last_buls  = [get_all_bulletins(ch["watch_dir"]) or get_all_bulletins(_BASE)
+                                      for ch in active]
                         last_check = time.time()
                     else:
                         debug(f"Slot [{seg_type}] — restarting to inject")
-                        _terminate_streams(p1, p2, p3)
-                        p1 = p2 = p3 = None
+                        _terminate_streams(procs)
+                        procs = [None] * STREAM_COUNT
                         inject_type = seg_type; inject_payload = payload
                         break
 
                 if time.time() - last_check > 60:
-                    new_kh  = get_all_bulletins(WATCH_DIR_KHAMMAM)   or get_all_bulletins(_BASE)
-                    new_ku  = get_all_bulletins(WATCH_DIR_KURNOOL)    or get_all_bulletins(_BASE)
-                    new_kr  = get_all_bulletins(WATCH_DIR_KARIMNAGAR) or get_all_bulletins(_BASE)
-
-                    if new_kh != last_kh or new_ku != last_ku or new_kr != last_kr:
+                    new_buls = [get_all_bulletins(ch["watch_dir"]) or get_all_bulletins(_BASE)
+                                for ch in active]
+                    if new_buls != last_buls:
                         debug("New bulletins — restarting streams")
-                        _terminate_streams(p1, p2, p3)
-                        p1 = p2 = p3 = None; break
+                        _terminate_streams(procs)
+                        procs = [None] * STREAM_COUNT; break
                     last_check = time.time()
 
-                # Individual crash recovery
-                if p1 and p1.poll() is not None:
-                    rc = p1.returncode
-                    debug(f"LocalAiTV DOWN ({_exit_reason(rc)}) — restart in 3s")
-                    stream_down("LocalAiTV"); time.sleep(3)
-                    if last_kh:
-                        p1 = start_ffmpeg_concat(STREAM_KEY, "LocalAiTV", CONCAT_LIST_P1)
-                        if p1: monitor_ffmpeg(p1, "LocalAiTV")
+                # Crash recovery per channel
+                for i, (proc, ch) in enumerate(zip(procs, active)):
+                    if proc and proc.poll() is not None:
+                        debug(f"{ch['label']} DOWN ({_exit_reason(proc.returncode)}) — restart in 3s")
+                        stream_down(ch["label"]); time.sleep(3)
+                        if last_buls[i] and ch["stream_key"]:
+                            procs[i] = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"])
+                            if procs[i]: monitor_ffmpeg(procs[i], ch["label"])
 
-                if p2 and p2.poll() is not None:
-                    rc = p2.returncode
-                    debug(f"KurnoolTV DOWN ({_exit_reason(rc)}) — restart in 3s")
-                    stream_down("KurnoolTV"); time.sleep(3)
-                    if STREAM_COUNT >= 2 and STREAM_KEY_KURNOOL and last_ku:
-                        p2 = start_ffmpeg_concat(STREAM_KEY_KURNOOL, "KurnoolTV", CONCAT_LIST_P2)
-                        if p2: monitor_ffmpeg(p2, "KurnoolTV")
-
-                # Outer relaunch only when ALL configured streams are dead
-                kurnool_on = STREAM_COUNT >= 2 and bool(STREAM_KEY_KURNOOL)
-                if (p1 is None) and (not kurnool_on or p2 is None):
-                    debug("All streams down — outer relaunch")
-                    break
+                if all(p is None or p.poll() is not None for p in procs):
+                    debug("All streams down — outer relaunch"); break
 
     except KeyboardInterrupt:
         debug("Stopped by user")
-        _terminate_streams(p1, p2, p3)
+        _terminate_streams(procs)
     finally:
-        stream_down("LocalAiTV"); stream_down("KurnoolTV"); stream_down("KarimnagarTV")
+        for ch in CHANNEL_DEFS:
+            stream_down(ch["label"])
         stop_background_threads(); kill_ffmpeg()
         debug("=== Streamer Stopped ===")
 

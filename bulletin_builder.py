@@ -309,10 +309,10 @@ def _safe_rmtree(path: str, retries: int = 5, delay: float = 2.0):
 
 
 _LOCATION_CACHE_FILE = os.path.join(os.path.dirname(__file__), '.location_channel_cache.json')
-_CHANNELS = ["Karimnagar", "Khammam", "Kurnool"]
+_CHANNELS = ["Karimnagar", "Khammam", "Kurnool", "Anatpur", "Kakinada", "Nalore", "Tirupati"]
 
 def classify_location_to_channel(location_names: list) -> dict:
-    """Use OpenAI to map raw location_name strings to one of 3 channels. Kurnool is default."""
+    """Use OpenAI to map raw location_name strings to one of 7 channels. Kurnool is default."""
     import json
     from openai import OpenAI
     from config import OPENAI_API_KEY
@@ -427,7 +427,8 @@ def build_all_location_bulletins(duration_minutes: int) -> dict:
     print(f"🗺️  Location mapping: {loc_to_channel}")
 
     # Bucket items by channel
-    channel_items = {"Karimnagar": [], "Khammam": [], "Kurnool": []}
+    channel_items = {"Karimnagar": [], "Khammam": [], "Kurnool": [],
+                     "Anatpur": [], "Kakinada": [], "Nalore": [], "Tirupati": []}
     for item in all_items:
         raw = item.get('location_name', '')
         channel = loc_to_channel.get(raw, "Kurnool")
