@@ -52,10 +52,7 @@ from ticker_overlay import add_ticker_overlay
 from config import BASE_OUTPUT_DIR, ITEM_VIDEO_CACHE_DIR as _ITEM_VIDEO_CACHE_DIR
  
 def _save_to_item_cache(counter, src_path: str):
-    """Copy a freshly-built concatenated item video to the global cache.
-    Called by webhook_server after _concat_item_segments succeeds.
-    Next bulletin picks it up via _cached_item_video() in bulletin_builder.
-    """
+    """Copy a freshly-built item video to local cache and upload to S3 asynchronously."""
     if not src_path or not os.path.exists(src_path):
         return
     os.makedirs(_ITEM_VIDEO_CACHE_DIR, exist_ok=True)
@@ -63,9 +60,17 @@ def _save_to_item_cache(counter, src_path: str):
     try:
         import shutil as _sh
         _sh.copy2(src_path, dst)
-        print(f"  💾 [CACHE] item_{counter}_video.mp4 saved")
+        print(f"  💾 [CACHE] item_{counter}_video.mp4 saved locally")
     except Exception as _e:
-        print(f"  ⚠️  [CACHE] copy failed counter={counter}: {_e}")
+        print(f"  ⚠️  [CACHE] local copy failed counter={counter}: {_e}")
+        dst = src_path  # still try S3 upload from source
+
+    # Async S3 upload — non-blocking
+    try:
+        import s3_storage as _s3
+        _s3.upload_file_async(dst, _s3.key_for_item_cache(counter))
+    except Exception as _e:
+        print(f"  ⚠️  [CACHE] S3 upload enqueue failed counter={counter}: {_e}")
  
 _NOTO_CANDIDATES = [
     "/usr/share/fonts/truetype/noto/NotoSansTelugu-Bold.ttf",

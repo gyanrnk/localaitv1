@@ -377,17 +377,51 @@ _STATIC_ASSETS = [
     'assets/intro4.mp4',
     'assets/Gidugu Regular.otf',
     'news_intro.mpeg',
+    # Fonts — downloaded only if Linux system fonts (fonts-noto) are not installed
+    'NotoSansTelugu.ttf',
+    'seguiemj.ttf',
 ]
 
+_SYSTEM_FONT_SUBSTITUTES = {
+    # If any system path exists, skip downloading the local fallback
+    'NotoSansTelugu.ttf': [
+        '/usr/share/fonts/truetype/noto/NotoSansTelugu-Bold.ttf',
+        '/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf',
+        '/usr/share/fonts/noto/NotoSansTelugu-Bold.ttf',
+    ],
+    'seguiemj.ttf': [
+        '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
+        '/usr/share/fonts/noto/NotoColorEmoji.ttf',
+    ],
+}
+
 def ensure_assets():
-    """Download missing static assets from S3. Skips files that already exist locally."""
+    """Download missing static assets from S3. Skips files that already exist locally
+    or whose system-font substitutes are present (avoids redundant font downloads)."""
     import boto3
-    missing = [a for a in _STATIC_ASSETS if not os.path.exists(os.path.join(BASE_DIR, a))]
+    from botocore.config import Config as _BotoConfig
+
+    def _needs_download(asset: str) -> bool:
+        if os.path.exists(os.path.join(BASE_DIR, asset)):
+            return False
+        fname = os.path.basename(asset)
+        for sys_path in _SYSTEM_FONT_SUBSTITUTES.get(fname, []):
+            if os.path.exists(sys_path):
+                return False  # system font available — local copy not needed
+        return True
+
+    missing = [a for a in _STATIC_ASSETS if _needs_download(a)]
     if not missing:
         return
+
+    _cfg = _BotoConfig(
+        request_checksum_calculation='when_required',
+        response_checksum_validation='when_required',
+    )
     s3 = boto3.client('s3', region_name=S3_REGION,
                       aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-                      aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'))
+                      aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+                      config=_cfg)
     for asset in missing:
         local_path = os.path.join(BASE_DIR, asset)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)

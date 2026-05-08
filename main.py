@@ -121,7 +121,12 @@ class NewsBot:
         analysis_path = os.path.join(OUTPUT_AUDIO_DIR, analysis_name) if analysis_name else None
  
         # ── Step 1: Script text ──────────────────────────────────────────────────
+        import s3_storage as _s3_regen
         script = None
+        if not os.path.exists(sc_path):
+            # Try S3 before regenerating
+            _s3_regen.ensure_local(sc_path, _s3_regen.key_for_script(script_filename))
+
         if os.path.exists(sc_path):
             with open(sc_path, 'r', encoding='utf-8') as f:
                 script = f.read().strip()
@@ -135,6 +140,8 @@ class NewsBot:
                 os.makedirs(OUTPUT_SCRIPT_DIR, exist_ok=True)
                 with open(sc_path, 'w', encoding='utf-8') as f:
                     f.write(script)
+                # Upload regenerated script to S3
+                _s3_regen.upload_file_async(sc_path, _s3_regen.key_for_script(script_filename))
         
         if not script:
             print(f"  [REGEN] ❌ No script — cannot regenerate item {counter}")
@@ -193,6 +200,16 @@ class NewsBot:
                     for text, path, label in tasks if path]
             results = [f.result() for f in futures]
  
+        # ── Step 3b: Upload newly generated audio files to S3 ────────────────────
+        for _audio_path, _audio_name in [
+            (sa_path,       script_audio_name),
+            (ha_path,       headline_audio_name),
+            (intro_path,    intro_name),
+            (analysis_path, analysis_name),
+        ]:
+            if _audio_path and os.path.exists(_audio_path):
+                _s3_regen.upload_file_async(_audio_path, _s3_regen.key_for_audio(_audio_name))
+
         # ── Step 4: Duration recalculate + status update ──────────────────────────
         # from bulletin_builder import load_metadata, save_metadata, _metadata_lock
         import subprocess

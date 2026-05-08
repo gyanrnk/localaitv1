@@ -29,35 +29,36 @@ PRIORITY_RANK = {
     'normal':   2,
 }
 
-TICKER_STATE_FILE = os.path.join(BASE_OUTPUT_DIR, 'ticker_state.json')
-
 def _load_ticker_cursor() -> float:
-    """Global ticker cursor load karo — midnight pe auto-reset."""
-    with _metadata_lock:
-        try:
-            with open(TICKER_STATE_FILE, 'r', encoding='utf-8') as f:
-                state = json.load(f)
-            saved_date = state.get('date', '')
-            today = datetime.now().strftime('%Y-%m-%d')
-            if saved_date != today:
-                print(f"🔄 Ticker cursor reset — new day ({saved_date} → {today})")
-                return 0.0
-            return float(state.get('cursor', 0.0))
-        except Exception:
+    """Global ticker cursor load karo CloudSQL se — midnight pe auto-reset."""
+    try:
+        import db as _db
+        raw = _db.get_state('ticker_cursor')
+        if not raw:
             return 0.0
+        state = json.loads(raw)
+        saved_date = state.get('date', '')
+        today = datetime.now().strftime('%Y-%m-%d')
+        if saved_date != today:
+            print(f"🔄 Ticker cursor reset — new day ({saved_date} → {today})")
+            return 0.0
+        return float(state.get('cursor', 0.0))
+    except Exception as e:
+        print(f"⚠️ ticker_cursor load error: {e}")
+        return 0.0
+
 
 def _save_ticker_cursor(val: float):
-    """Global ticker cursor persist karo."""
-    with _metadata_lock:
-        try:
-            with open(TICKER_STATE_FILE, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'cursor': round(val, 3),
-                    'date':   datetime.now().strftime('%Y-%m-%d'),
-                    'updated_at': datetime.now().isoformat()
-                }, f, indent=2)
-        except Exception as e:
-            print(f"❌ ticker_state save error: {e}")
+    """Global ticker cursor CloudSQL mein persist karo."""
+    try:
+        import db as _db
+        _db.set_state('ticker_cursor', json.dumps({
+            'cursor':     round(val, 3),
+            'date':       datetime.now().strftime('%Y-%m-%d'),
+            'updated_at': datetime.now().isoformat(),
+        }))
+    except Exception as e:
+        print(f"❌ ticker_state save error: {e}")
 
 CLIP_MAX = 20  # max clip duration to consider for allocation (in seconds)
 
@@ -458,6 +459,7 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
     # Validate items — both audio files must exist
     # EXCLUDE items marked for next bulletin (they were skipped before)
+    import s3_storage as _s3
     valid_items = []
     for item in all_items:
         if item.get('next_bulletin'):
@@ -466,6 +468,13 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         script_audio   = item.get('script_audio', '')
         ha_path = os.path.join(OUTPUT_HEADLINE_DIR, headline_audio)
         sa_path = os.path.join(OUTPUT_AUDIO_DIR,    script_audio)
+
+        # S3 fallback — download missing audio files before validation
+        if headline_audio and not os.path.exists(ha_path):
+            _s3.ensure_local(ha_path, _s3.key_for_audio(headline_audio))
+        if script_audio and not os.path.exists(sa_path):
+            _s3.ensure_local(sa_path, _s3.key_for_audio(script_audio))
+
         if headline_audio and script_audio and os.path.exists(ha_path) and os.path.exists(sa_path):
             valid_items.append(item)
 
@@ -684,7 +693,7 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
                 skipped_counters.append(ctr)
         if skipped_counters:
             _db.execute(
-                "UPDATE news_items SET next_bulletin = TRUE WHERE counter = ANY(%s)",
+                "UPDATE news_items SET next_bulletin = 1 WHERE counter = ANY(%s)",
                 (skipped_counters,)
             )
 
@@ -1022,6 +1031,8 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
         if intro_src_name:
             intro_src = os.path.join(OUTPUT_AUDIO_DIR, intro_src_name)
+            if not os.path.exists(intro_src):
+                _s3.ensure_local(intro_src, _s3.key_for_audio(intro_src_name))
             if os.path.exists(intro_src):
                 intro_dest_name = f"{str(idx).zfill(2)}_{intro_src_name}"
                 shutil.copy2(intro_src, os.path.join(scripts_dir, intro_dest_name))
@@ -1031,6 +1042,8 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
         if analysis_src_name:
             analysis_src = os.path.join(OUTPUT_AUDIO_DIR, analysis_src_name)
+            if not os.path.exists(analysis_src):
+                _s3.ensure_local(analysis_src, _s3.key_for_audio(analysis_src_name))
             if os.path.exists(analysis_src):
                 analysis_dest_name = f"{str(idx).zfill(2)}_{analysis_src_name}"
                 shutil.copy2(analysis_src, os.path.join(scripts_dir, analysis_dest_name))
@@ -1151,6 +1164,13 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
     manifest_path = os.path.join(temp_dir, 'bulletin_manifest.json')
     with open(manifest_path, 'w', encoding='utf-8') as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    # Upload manifest to S3 (async — does not block build)
+    safe_loc = re.sub(r'[^\w\-]', '_', (location_name or 'General').strip()).title()
+    _s3.upload_file_async(
+        manifest_path,
+        _s3.key_for_bulletin_manifest(safe_loc, bulletin_name),
+    )
 
     # Atomic rename
     if os.path.exists(bulletin_dir):

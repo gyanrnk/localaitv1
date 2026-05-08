@@ -31,7 +31,6 @@ import requests as _req
 from config import API_BASE_URL, BULLETIN_API_TOKEN, LOCALAITV_API_URL, BASE_DIR, OUTPUT_AUDIO_DIR, OUTPUT_HEADLINE_DIR, OUTPUT_SCRIPT_DIR  # ya alag variable
 
 REPORTS_API_URL = "https://localaitv.com/api/webhooks/reports"
-PROCESSED_IDS_FILE = os.path.join(BASE_DIR, 'processed_report_ids.json')
 
 try:
     from config import BASE_DIR, PORT
@@ -1073,44 +1072,65 @@ def _run_planner():
             _last_count = _get_metadata_count()
             logger.info(f"✅ Bulletin ready → {video_path}")
 
+            # ── Upload bulletin video to S3 (async, non-blocking) ────────────────
+            if video_path and os.path.exists(video_path):
+                try:
+                    import s3_storage as _s3_ws
+                    import re as _re
+                    _chan = info.get('location_name', 'General')
+                    _bul_name = os.path.basename(bulletin_dir)
+                    _s3_key = _s3_ws.key_for_bulletin_video(
+                        _re.sub(r'[^\w\-]', '_', _chan).title(), _bul_name
+                    )
+                    _s3_ws.upload_file_async(video_path, _s3_key)
+                    logger.info(f"📤 [S3] Bulletin video upload queued: {_s3_key}")
+                except Exception as _s3e:
+                    logger.warning(f"⚠️ S3 bulletin upload enqueue failed: {_s3e}")
+
             # ── POST full bulletin video to Bulletins API (uncomment when needed) ──
             # _send_bulletin_to_api(bulletin_dir, video_path, _manifest)
             print(f"📤 Payload preview (would send to API): {json.dumps(_manifest, ensure_ascii=False)[:1000]}...")
+
+        # ── Auto-trigger: sirf tab jab build successful ho aur genuinely NEW items hon ──
+        # Condition: used_count=0 AND next_bulletin=0
+        # (next_bulletin=1 items pehle se skipped hain — unke liye planner_loop trigger karega)
+        try:
+            import db as _db_pending
+            _row = _db_pending.fetchall(
+                "SELECT COUNT(*) AS n FROM news_items WHERE used_count = 0 AND next_bulletin = 0"
+            )
+            new_pending = int(_row[0]["n"]) if _row else 0
+            if new_pending > 0:
+                logger.info(f"🔄 Post-build: {new_pending} new items arrived during build — auto-triggering")
+                threading.Thread(target=_run_planner, daemon=True).start()
+        except Exception:
+            pass
 
     except Exception as e:
         logger.error(f"❌ Planner build error: {e}", exc_info=True)
 
     finally:
         _building_lock.release()
-        # ── Auto-trigger: agar build ke dauran naye items aaye toh ──
-        try:
-            import db as _db_pending
-            _row = _db_pending.fetchall("SELECT COUNT(*) AS n FROM news_items WHERE used_count = 0")
-            pending = int(_row[0]["n"]) if _row else 0
-            if pending > 0:
-                logger.info(f"🔄 Post-build: {pending} items pending — auto-triggering next build")
-                threading.Thread(target=_run_planner, daemon=True).start()
-        except Exception:
-            pass
 
 
 
 def _load_processed_ids():
+    """Load processed report IDs from CloudSQL (processed_reports table)."""
     try:
-        with open(PROCESSED_IDS_FILE, 'r') as f:
-            return set(json.load(f))
-    except:
+        import db as _db_pid
+        rows = _db_pid.fetchall(
+            "SELECT report_id FROM processed_reports WHERE status IN ('complete', 'failed')"
+        )
+        return {r['report_id'] for r in rows}
+    except Exception as e:
+        logger.warning(f"⚠️ Could not load processed IDs from DB: {e}")
         return set()
 
 def _save_processed_id(report_id: str):
+    """processed_reports table already tracks this — just keep the in-memory set updated."""
     _processed_report_ids.add(report_id)
-    try:
-        with open(PROCESSED_IDS_FILE, 'w') as f:
-            json.dump(list(_processed_report_ids), f)
-    except Exception as e:
-        logger.warning(f"⚠️ Could not save processed IDs: {e}")
 
-_processed_report_ids = _load_processed_ids()  # ← set() replace kiya
+_processed_report_ids = _load_processed_ids()
 
 def poll_reports_loop():
     """Poll reports API every 10 seconds for new submissions"""
@@ -1128,13 +1148,7 @@ def poll_reports_loop():
             )
             if resp.status_code == 200:
                 data = resp.json()
-                try:
-                    debug_path = os.path.join(BASE_DIR, "debug_report.json")
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=4, ensure_ascii=False)
-                    # logger.info(f"📝 Saved polled report JSON to {debug_path}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Debug write failed: {e}")
+                # debug_report.json write removed — was local-only and not needed in production
                 reports = data.get('items', data.get('data', []))
                 
                 for report in reports:
@@ -1268,9 +1282,8 @@ def cleanup_old_data_loop():
     from time import time, sleep
     from datetime import datetime, timezone, timedelta
 
-    MAX_AGE_SEC      = 24 * 60 * 60   # 24 hours
-    CHECK_INTERVAL   = 3600           # har 1hr mein check
-    LAST_RUN_FILE    = os.path.join(BASE_DIR, ".last_cleanup")
+    MAX_AGE_SEC    = 24 * 60 * 60   # 24 hours
+    CHECK_INTERVAL = 3600           # har 1hr mein check
 
     logger.info("🧹 Cleanup loop started (24hr mode, checks every 1hr)")
 
@@ -1296,11 +1309,12 @@ def cleanup_old_data_loop():
     while True:
         now = time()
 
-        # ── Restart-safe: last run check ──────────────────────────────────────
+        # ── Restart-safe: last run check from CloudSQL ────────────────────────
         last_run = 0.0
         try:
-            if os.path.exists(LAST_RUN_FILE):
-                last_run = float(open(LAST_RUN_FILE).read().strip())
+            import db as _db_cleanup
+            raw_lr = _db_cleanup.get_state('last_cleanup_run')
+            last_run = float(raw_lr) if raw_lr else 0.0
         except Exception:
             last_run = 0.0
 
@@ -1550,33 +1564,14 @@ def cleanup_old_data_loop():
             logger.warning(f"⚠️ report_state.json cleanup failed: {e}")
 
         # ══════════════════════════════════════════════════════════════════════
-        # STEP 11 — processed_report_ids.json (live IDs se sync)
+        # STEP 11 — In-memory processed_report_ids sync with DB
         # ══════════════════════════════════════════════════════════════════════
         try:
             global _processed_report_ids
-            import report_state_manager as _rsm2
-            with _rsm2._lock:
-                live_data = _rsm2._load()
-            live_ids = set(live_data.keys())
-            _processed_report_ids = _processed_report_ids & live_ids
-            with open(PROCESSED_IDS_FILE, 'w') as f:
-                json.dump(list(_processed_report_ids), f)
-            logger.info(
-                f"🗑️ processed_report_ids.json → {len(_processed_report_ids)} active IDs"
-            )
+            _processed_report_ids = _load_processed_ids()
+            logger.info(f"🗑️ processed_report_ids refreshed from DB → {len(_processed_report_ids)} IDs")
         except Exception as e:
-            logger.warning(f"⚠️ processed_report_ids.json cleanup failed: {e}")
-
-        # ══════════════════════════════════════════════════════════════════════
-        # STEP 12 — debug_report.json (24hr+ old hone par delete)
-        # ══════════════════════════════════════════════════════════════════════
-        debug_path = os.path.join(BASE_DIR, "debug_report.json")
-        try:
-            if (os.path.exists(debug_path) and
-                    now - os.path.getmtime(debug_path) > MAX_AGE_SEC):
-                _del_file(debug_path)
-        except Exception as e:
-            logger.warning(f"⚠️ debug_report.json cleanup failed: {e}")
+            logger.warning(f"⚠️ processed_report_ids DB refresh failed: {e}")
 
         # ══════════════════════════════════════════════════════════════════════
         # DONE
@@ -1584,9 +1579,9 @@ def cleanup_old_data_loop():
         logger.info("✅ 24-hour cleanup complete")
 
         try:
-            open(LAST_RUN_FILE, 'w').write(str(now))
+            _db_cleanup.set_state('last_cleanup_run', str(now))
         except Exception as e:
-            logger.warning(f"⚠️ Could not save .last_cleanup timestamp: {e}")
+            logger.warning(f"⚠️ Could not save last_cleanup_run to DB: {e}")
 
         sleep(CHECK_INTERVAL)
 
