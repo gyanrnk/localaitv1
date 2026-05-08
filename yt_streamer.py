@@ -81,6 +81,8 @@ MARRIAGE_PREFIX = "marriages/outputs/"
 INJECT_CACHE_DIR = Path("s3_inject_cache")
 INJECT_CACHE_DIR.mkdir(exist_ok=True)
 
+FILLER_FILE = Path(os.getenv("FILLER_FILE", "filler.mp4"))
+
 _train_rotation_idx = 0
 
 # ── Fixed daily broadcast schedule (IST) ─────────────────────────────────────
@@ -561,6 +563,7 @@ def _exit_reason(rc):
 
 def _launch_streams(inject_type=None, inject_payload=None):
     MIN_BULLETINS = 5
+    filler = FILLER_FILE if FILLER_FILE.exists() else None
 
     def _with_fallback(folder):
         primary = get_all_bulletins(folder)
@@ -571,6 +574,9 @@ def _launch_streams(inject_type=None, inject_payload=None):
         for f in primary + fallback:
             if str(f) not in seen:
                 seen.add(str(f)); merged.append(f)
+        if not merged and filler:
+            debug(f"No bulletins in {folder} — using filler")
+            return [filler]
         return merged
 
     active = CHANNEL_DEFS[:STREAM_COUNT]
@@ -625,7 +631,7 @@ def run_streamer():
             cur_buls = [get_all_bulletins(ch["watch_dir"]) or get_all_bulletins(_BASE)
                         for ch in active]
 
-            if not any(cur_buls):
+            if not any(cur_buls) and not FILLER_FILE.exists():
                 debug("No bulletins in any folder — 10s wait...")
                 time.sleep(10); continue
 
