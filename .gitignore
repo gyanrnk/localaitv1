@@ -26,6 +26,9 @@ Thumbs.db
 *.jpg
 *.jpeg
 *.png
+*.gif
+*.ttf
+*.otf
 *.json
 *.txt
 *.filter
