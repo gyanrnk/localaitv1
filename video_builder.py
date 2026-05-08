@@ -1946,6 +1946,8 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
     # turant concat + incident API fire karne ke liye. Subprocess boundary
     # cross karne ka sabse clean tarika yahi hai.
     def _write_item_ready_marker(rank: int, item: dict, segments: list, reused: bool = False):
+        if not reused and len(segments) == 1 and item.get('counter'):
+            _save_to_item_cache(item.get('counter'), segments[0])
         marker_path = os.path.join(segments_dir, f'item_{rank:02d}_ready.json')
         try:
             with open(marker_path, 'w', encoding='utf-8') as _mf:
@@ -2040,7 +2042,16 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
         structure  = item.get('clip_structure', 'intro_clip_analysis')
         clip_start = item.get('clip_start')
         clip_end   = item.get('clip_end')
- 
+
+        # ── Cache reuse: skip rebuild if item video already exists ────────
+        _cached = os.path.join(_ITEM_VIDEO_CACHE_DIR, f'item_{counter}_video.mp4')
+        if counter and os.path.exists(_cached) and os.path.getsize(_cached) > 100_000:
+            news_seg_map[rank] = [_cached]
+            print(f"  ♻️  Item rank={rank} counter={counter} — reused from cache")
+            _write_item_ready_marker(rank, item, [_cached], reused=True)
+            continue
+        # ─────────────────────────────────────────────────────────────────
+
         media_file = find_input_media(counter, media_type)
         
         intro_audio_name    = item.get('intro_audio_filename', '')
