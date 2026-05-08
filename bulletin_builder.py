@@ -1193,7 +1193,7 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
     #     save_metadata(all_items_updated)
     import db as _db
     _db.execute(
-        "UPDATE news_items SET used_count = used_count + 1 WHERE counter = ANY(%s)",
+        "UPDATE news_items SET used_count = used_count + 1, bulletined = 1 WHERE counter = ANY(%s)",
         (list(selected_counters),)
     )
     print(f"✅ used_count updated for {len(selected_counters)} items")

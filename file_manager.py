@@ -167,6 +167,25 @@ class FileManager:
             s3_key = _s3.key_for_input(file_type, new_filename)
             _s3.upload_file_async(new_path, s3_key)
 
+            # Generate thumbnail for videos and upload to S3
+            s3_key_thumb = None
+            if file_type == 'video':
+                thumb_filename = f"{Path(new_filename).stem}_thumb.jpg"
+                thumb_path = os.path.join(target_dir, thumb_filename)
+                try:
+                    import subprocess
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", new_path, "-ss", "00:00:01",
+                         "-vframes", "1", "-q:v", "2", thumb_path],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=30
+                    )
+                    if os.path.exists(thumb_path):
+                        s3_key_thumb = _s3.key_for_input('video', thumb_filename)
+                        _s3.upload_file_async(thumb_path, s3_key_thumb)
+                except Exception as _te:
+                    print(f"⚠️ Thumbnail generation failed: {_te}")
+
             return {
                 'type': file_type,
                 'input_path': new_path,
@@ -174,6 +193,7 @@ class FileManager:
                 'counter': counter,
                 'media_files': [new_filename],
                 's3_key_input': s3_key,
+                's3_key_thumb': s3_key_thumb,
             }
         except Exception as e:
             print(f"Error saving file: {e}")

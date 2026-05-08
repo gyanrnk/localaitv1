@@ -20,7 +20,7 @@ S3_PFX_SCRIPTS   = "items/scripts"    # items/scripts/{filename}
 S3_PFX_HEADLINES = "items/headlines"  # items/headlines/{filename}
 S3_PFX_AUDIOS    = "items/audios"     # items/audios/{filename}
 S3_PFX_CACHE     = "item_cache"       # item_cache/item_{counter}_video.mp4
-S3_PFX_BULLETINS = "bulletins"        # bulletins/{channel}/{bul_name}.mp4
+S3_PFX_BULLETINS = "bulletins"         # bulletins/{channel}/{bul_name}.mp4
 
 # Disable automatic checksum injection — prevents AwsChunkedWrapper (non-seekable)
 # from wrapping the upload stream, which breaks botocore retry logic.
@@ -60,14 +60,30 @@ def _log(msg: str):
         print(msg.encode('ascii', errors='replace').decode())
 
 
+_CONTENT_TYPES = {
+    '.mp4': 'video/mp4',
+    '.mp3': 'audio/mpeg',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.json': 'application/json',
+    '.txt': 'text/plain; charset=utf-8',
+    '.webp': 'image/webp',
+}
+
 def upload_file(local_path: str, s3_key: str, bucket: str = None) -> Optional[str]:
     """Upload a local file to S3. Returns s3_key on success, None on failure."""
     if not local_path or not os.path.exists(local_path):
         _log(f"[S3] WARN upload_file: local file missing: {local_path}")
         return None
     bkt = bucket or _bucket()
+    ext = os.path.splitext(local_path)[1].lower()
+    extra = {}
+    if ext in _CONTENT_TYPES:
+        extra = {'ContentType': _CONTENT_TYPES[ext]}
     try:
-        _get_client().upload_file(local_path, bkt, s3_key)
+        _get_client().upload_file(local_path, bkt, s3_key, ExtraArgs=extra or None)
         _log(f"[S3] OK Uploaded: {s3_key}")
         return s3_key
     except Exception as e:
@@ -149,13 +165,24 @@ def delete_file(s3_key: str, bucket: str = None) -> bool:
 
 # ── Async upload (fire-and-forget background thread) ─────────────────────────
 
-def upload_file_async(local_path: str, s3_key: str, bucket: str = None):
-    """Upload in a daemon thread — does not block caller."""
-    threading.Thread(
-        target=upload_file,
-        args=(local_path, s3_key, bucket),
-        daemon=True,
-    ).start()
+def public_url(s3_key: str, bucket: str = None) -> str:
+    """Return the public HTTPS URL for an S3 key."""
+    bkt    = bucket or _bucket()
+    region = os.getenv('AWS_REGION', 'ap-south-2')
+    return f"https://{bkt}.s3.{region}.amazonaws.com/{s3_key}"
+
+
+def upload_file_async(local_path: str, s3_key: str, bucket: str = None,
+                      on_complete=None):
+    """Upload in a daemon thread. Calls on_complete() after successful upload."""
+    def _run():
+        upload_file(local_path, s3_key, bucket)
+        if on_complete:
+            try:
+                on_complete()
+            except Exception as e:
+                _log(f"[S3] ERR on_complete callback failed: {e}")
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ── S3 key builders ────────────────────────────────────────────────────────────

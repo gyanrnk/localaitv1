@@ -103,8 +103,8 @@ TICKER_START_T = float(INTRO_VIDEO_DURATION)
 # Strip render settings
 HEADLINE_FONTSIZE = 40
 AD_FONTSIZE       = 40
-HEADLINE_COLOR    = (20, 20, 20, 255)
-AD_COLOR          = (255, 255, 255, 255)
+HEADLINE_COLOR    = (255, 255, 255, 255)   # white
+AD_COLOR          = (255, 215, 0,   255)   # yellow
 
 AD_SEP = '      '
 

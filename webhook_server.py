@@ -28,7 +28,7 @@ init_db()
 
 
 import requests as _req
-from config import API_BASE_URL, BULLETIN_API_TOKEN, LOCALAITV_API_URL, BASE_DIR, OUTPUT_AUDIO_DIR, OUTPUT_HEADLINE_DIR, OUTPUT_SCRIPT_DIR  # ya alag variable
+from config import API_BASE_URL, BULLETIN_API_TOKEN, LOCALAITV_API_URL, BASE_DIR, OUTPUT_AUDIO_DIR, OUTPUT_HEADLINE_DIR, OUTPUT_SCRIPT_DIR
 
 REPORTS_API_URL = "https://localaitv.com/api/webhooks/reports"
 
@@ -276,16 +276,12 @@ def _delete_incident(incident_id: str):
     except Exception as e:
         logger.error(f"❌ Delete incident error: {e}")
 
-def _send_bulletin_items_to_api(items: list, segments_url: str, bulletin_dir: str):
+def _send_bulletin_items_to_api(items: list):
     import requests as _req
     import concurrent.futures
-    from config import (
-        LOCALAITV_API_URL, LOCALAITV_API_TOKEN,
-        API_BASE_URL, BASE_OUTPUT_DIR, BASE_INPUT_DIR,
-        INPUT_IMAGE_DIR, INPUT_VIDEO_DIR,
-        PREFIX_IMAGE, PREFIX_VIDEO,
-        LOCALAITV_CATEGORY_ID,
-    )
+    import db as _db_items
+    import s3_storage as _s3_items
+    from config import LOCALAITV_API_URL, LOCALAITV_CATEGORY_ID
 
     if not LOCALAITV_API_URL or not items:
         return
@@ -294,146 +290,82 @@ def _send_bulletin_items_to_api(items: list, segments_url: str, bulletin_dir: st
     if BULLETIN_API_TOKEN:
         headers["Authorization"] = f"Bearer {BULLETIN_API_TOKEN}"
 
-    def to_url(local_path):
-        norm = local_path.replace("\\", "/")
-        out  = BASE_OUTPUT_DIR.replace("\\", "/").rstrip("/")
-        inp  = BASE_INPUT_DIR.replace("\\", "/").rstrip("/")
-        if norm.startswith(out):
-            rel = norm[len(out):].lstrip("/")
-        elif norm.startswith(inp):
-            rel = norm[len(inp):].lstrip("/")
-        else:
-            rel = os.path.basename(local_path)
-        return f"{API_BASE_URL}/api/media/{rel}"
-
-    def find_media(counter, media_type):
-        exts_map = {
-            "image": (["jpg","jpeg","png","webp","gif"], INPUT_IMAGE_DIR, PREFIX_IMAGE),
-            "video": (["mp4","mov","avi","mkv","webm"], INPUT_VIDEO_DIR, PREFIX_VIDEO),
-        }
-        if media_type not in exts_map:
-            return None
-        exts, directory, prefix = exts_map[media_type]
-        for ext in exts:
-            p = os.path.join(directory, f"{prefix}{counter}.{ext}")
-            if os.path.exists(p):
-                return p
-        return None
-
-    # Metadata fallback for location_id — ek baar load karo
-    from bulletin_builder import load_metadata as _load_meta
-    _meta_map = {str(m.get('counter')): m for m in _load_meta()}
-
-    from config import OUTPUT_SCRIPT_DIR
+    # Fetch S3 keys for all items in one query
+    counters = [item.get('counter') for item in items if item.get('counter') is not None]
+    _s3_map  = {}
+    if counters:
+        rows = _db_items.fetchall(
+            "SELECT counter, media_type, s3_key_input, s3_key_script_audio, "
+            "script_filename, user_id, location_id, location_name "
+            "FROM news_items WHERE counter = ANY(%s)",
+            (counters,)
+        )
+        for r in rows:
+            _s3_map[(r['counter'], r['media_type'])] = r
 
     def _post_one(item):
         try:
-            item_loc_id = item.get("location_id")
-            if not item_loc_id or int(item_loc_id) == 0:
-                meta_entry  = _meta_map.get(str(item.get('counter')), {})
-                item_loc_id = meta_entry.get('location_id')
-                if item_loc_id:
-                    item['location_id']   = item_loc_id
-                    item['location_name'] = meta_entry.get('location_name', '')
-            # if not item_loc_id or int(item_loc_id) == 0:
-            #     logger.info(f"  Skipping item {item.get('counter')} - no valid location_id")
-            #     return None
+            counter    = item.get("counter")
+            media_type = item.get("media_type", "")
+            headline   = item.get("headline", "వార్త")
 
+            db_row = _s3_map.get((counter, media_type), {})
 
-
-            counter         = item.get("counter")
-            media_type      = item.get("media_type", "")
-            headline        = item.get("headline", "వార్త")
-            script_audio    = item.get("script_audio", "")
-            script_filename = item.get("script_filename", "")
-
-            scripts_dir = os.path.join(bulletin_dir, "scripts")
-            audio_local = os.path.join(scripts_dir, script_audio)
-            audio_url   = to_url(audio_local) if os.path.exists(audio_local) else None
-
-            script_text     = ""
-            script_txt_path = os.path.join(OUTPUT_SCRIPT_DIR, script_filename) if script_filename else None
-            if script_txt_path and os.path.exists(script_txt_path):
+            # ── script text from S3 ──────────────────────────────────────────
+            script_text = headline
+            script_filename = item.get("script_filename") or (db_row.get("script_filename") if db_row else None)
+            if script_filename:
                 try:
-                    with open(script_txt_path, "r", encoding="utf-8") as _sf:
-                        script_text = _sf.read().strip()
-                except Exception as _e:
-                    logger.warning(f"  ⚠️ Could not read script for item {counter}: {_e}")
-            if not script_text:
-                script_text = headline
+                    raw = _s3_items.download_bytes(_s3_items.key_for_script(script_filename))
+                    if raw:
+                        script_text = raw.decode("utf-8").strip() or headline
+                except Exception:
+                    pass
 
-            # media_local      = find_media(counter, media_type)
-            # image_url        = to_url(media_local) if (media_local and media_type == "image") else None
+            # ── cover image: S3 key from DB ──────────────────────────────────
+            image_url = None
+            s3_key_input = db_row.get("s3_key_input") if db_row else None
+            if s3_key_input and media_type == "image":
+                image_url = _s3_items.public_url(s3_key_input)
+            elif s3_key_input and media_type == "video":
+                thumb_key = s3_key_input.rsplit('.', 1)[0] + '_thumb.jpg'
+                if _s3_items.file_exists(thumb_key):
+                    image_url = _s3_items.public_url(thumb_key)
 
-            media_local = find_media(counter, media_type)
-            image_url   = None
-
-            if media_local and media_type == "image":
-                image_url = to_url(media_local)
-            elif media_local and media_type == "video":
-                # Video ke pehle frame se thumbnail extract karo
-                thumb_path = media_local.rsplit(".", 1)[0] + "_thumb.jpg"
-                if not os.path.exists(thumb_path):
-                    import subprocess
-                    subprocess.run(
-                        ["ffmpeg", "-y", "-i", media_local, "-ss", "00:00:01",
-                        "-vframes", "1", "-q:v", "2", thumb_path],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                if os.path.exists(thumb_path):
-                    image_url = to_url(thumb_path)
-            rank             = item.get("rank", counter)
+            # ── item video: item_cache from S3 ───────────────────────────────
             news_segment_url = None
-            item_video_local = item.get('item_video_local')
-            if item_video_local and os.path.exists(item_video_local):
-                news_segment_url = to_url(item_video_local)
-            else:
-                logger.warning(f"  ⚠️ No concat item video for rank={rank} — video_path skipped")
-            payload = {
-                "title":       headline[:255],
-                "description": script_text[:1000],   # ← trim — heavy payload fix
-                "category_id": str(LOCALAITV_CATEGORY_ID),
-            }
-            # loc_id = item.get('location_id')
-            # if loc_id is not None and str(loc_id) != '0':
-            #     payload["location_id"] = str(loc_id)
+            if counter is not None:
+                cache_key = _s3_items.key_for_item_cache(counter)
+                if _s3_items.file_exists(cache_key):
+                    news_segment_url = _s3_items.public_url(cache_key)
 
-            loc_id = item.get('location_id', 0)
-            if not loc_id or int(loc_id) == 0:
-                loc_id = 1  # sirf tab jab API ne nahi bheja
-            payload["location_id"] = str(loc_id)
-
-            # loc_id = item.get('location_id', 0) or 1  # fallback to 1 (Hyderabad) if 0
-            # payload["location_id"] = int(loc_id)
-
+            # ── location + user_id from DB ───────────────────────────────────
+            loc_id = item.get('location_id') or (db_row.get('location_id') if db_row else None) or 1
             post_location = (
                 item.get('location_name') or
-                item.get('location_address') or
+                (db_row.get('location_name') if db_row else None) or
                 'Telangana'
             )
-            payload["post_location"] = post_location
-            created_at = item.get('created_at', '') or item.get('timestamp', '')
-            print(1143, "created_at:", created_at)
-            payload["timestamp"] = created_at if created_at else datetime.now().isoformat()
-
-            # _post_one ke andar — already existing code ke saath:
-            user_id = item.get('user_id', '')
+            user_id = item.get('user_id') or (db_row.get('user_id') if db_row else None)
             if not user_id:
-                meta_entry = _meta_map.get(str(item.get('counter')), {})
-                user_id    = meta_entry.get('user_id', '')
-            if user_id:
-                payload["user_id"] = user_id
-            else:
                 logger.warning(f"  ⏭️  Item {counter} — user_id missing, skipping")
-                return  # ya continue, depending on structure
-            # if audio_url:
-            #     payload["audio_path"] = audio_url
+                return
+
+            created_at = item.get('created_at', '') or item.get('timestamp', '')
+
+            payload = {
+                "title":         headline[:255],
+                "description":   script_text[:1000],
+                "category_id":   str(LOCALAITV_CATEGORY_ID),
+                "location_id":   str(loc_id),
+                "post_location": post_location,
+                "timestamp":     created_at if created_at else datetime.now().isoformat(),
+                "user_id":       user_id,
+            }
             if image_url:
                 payload["cover_image_path"] = image_url
             if news_segment_url:
                 payload["video_path"] = news_segment_url
-            if segments_url:
-                payload["segments_path"] = segments_url
 
             _log_payload(f'incident_item_{counter}', payload)
             logger.info(f"  📦 Incident payload [item {counter}]: {json.dumps(payload, ensure_ascii=False)}")
@@ -529,46 +461,37 @@ def _send_bulletin_items_to_api(items: list, segments_url: str, bulletin_dir: st
 
 ##### ── 08-04-15-43 ────────────────────────────────────────────────────
 def _get_bulletin_thumbnail(items: list, manifest: dict) -> str | None:
-    """First item ka thumbnail return karta hai bulletin ke liye."""
-    from config import BASE_OUTPUT_DIR, BASE_INPUT_DIR, INPUT_IMAGE_DIR, INPUT_VIDEO_DIR, PREFIX_IMAGE, PREFIX_VIDEO, API_BASE_URL
-
-    def to_url(local_path):
-        norm = local_path.replace("\\", "/")
-        out  = BASE_OUTPUT_DIR.replace("\\", "/").rstrip("/")
-        inp  = BASE_INPUT_DIR.replace("\\", "/").rstrip("/")
-        if norm.startswith(out):
-            rel = norm[len(out):].lstrip("/")
-        elif norm.startswith(inp):
-            rel = norm[len(inp):].lstrip("/")
-        else:
-            rel = os.path.basename(local_path)
-        return f"{API_BASE_URL}/api/media/{rel}"
+    """First item ka S3 thumbnail URL return karta hai bulletin ke liye."""
+    import db as _db_thumb
+    import s3_storage as _s3_thumb
 
     sorted_items = sorted(items, key=lambda x: x.get("rank", x.get("counter", 999)))
+    counters = [i.get("counter") for i in sorted_items if i.get("counter") is not None]
+    if not counters:
+        return None
+
+    rows = _db_thumb.fetchall(
+        "SELECT counter, media_type, s3_key_input FROM news_items WHERE counter = ANY(%s)",
+        (counters,)
+    )
+    row_map = {r['counter']: r for r in rows}
+
     for item in sorted_items:
         counter    = item.get("counter")
         media_type = item.get("media_type", "")
+        row        = row_map.get(counter, {})
+        s3_key     = row.get("s3_key_input")
+        if not s3_key:
+            continue
 
         if media_type == "image":
-            for ext in ["jpg","jpeg","png","webp"]:
-                p = os.path.join(INPUT_IMAGE_DIR, f"{PREFIX_IMAGE}{counter}.{ext}")
-                if os.path.exists(p):
-                    return to_url(p)
+            return _s3_thumb.public_url(s3_key)
 
         elif media_type == "video":
-            for ext in ["mp4","mov","avi","mkv","webm"]:
-                p = os.path.join(INPUT_VIDEO_DIR, f"{PREFIX_VIDEO}{counter}.{ext}")
-                if os.path.exists(p):
-                    thumb_path = p.rsplit(".", 1)[0] + "_thumb.jpg"
-                    if not os.path.exists(thumb_path):
-                        import subprocess
-                        subprocess.run(
-                            ["ffmpeg", "-y", "-i", p, "-ss", "00:00:01",
-                             "-vframes", "1", "-q:v", "2", thumb_path],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                        )
-                    if os.path.exists(thumb_path):
-                        return to_url(thumb_path)
+            thumb_key = s3_key.rsplit('.', 1)[0] + '_thumb.jpg'
+            if _s3_thumb.file_exists(thumb_key):
+                return _s3_thumb.public_url(thumb_key)
+
     return None
 
 ##### ── 08-04-15-43 ────────────────────────────────────────────────────
@@ -614,20 +537,12 @@ def _trim_timestamp(ts: str) -> str:
         return ts.split(".")[0] if "." in ts else ts
 ##------------ added 10-04-12-43 ------------    
 
-def _send_bulletin_to_api(bulletin_dir: str, video_path: str, manifest: dict):
+def _send_bulletin_to_api(bulletin_dir: str, video_url: str, manifest: dict):
     import requests as _req
-    from config import LOCALAITV_API_TOKEN, API_BASE_URL, BASE_OUTPUT_DIR
 
     url = "https://localaitv.com/api/bulletins"
     headers = {"Authorization": f"Bearer {BULLETIN_API_TOKEN}",
                "Content-Type": "application/json"}
-
-    # Video URL banana
-    if '/outputs/' in video_path:
-        rel = video_path.replace('\\', '/').split('/outputs/')[1]
-    else:
-        rel = os.path.basename(video_path)
-    video_url = f"{API_BASE_URL}/api/media/{rel}"
 
     items     = manifest.get('items', [])
     loc_name  = items[0].get('location_name', '') if items else ''
@@ -642,10 +557,8 @@ def _send_bulletin_to_api(bulletin_dir: str, video_path: str, manifest: dict):
 
     # ✅ Only starting time
     start_time = start_dt.strftime('%I:%M %p').lstrip('0')
-    # location_en = manifest.get('location', '') or (items[0].get('location_name', '') if items else '')
-    # # "Kurnool, Kurnool" jaise strings se sirf pehla part lo
-    # location_en = location_en.split(',')[0].strip()
-    location_en = "Kurnool"
+    location_en = manifest.get('location_name') or (items[0].get('location_name', '') if items else '')
+    location_en = location_en.split(',')[0].strip() or 'News'
     _oai = OpenAIHandler()
     location_te = _oai.translate_to_telugu(location_en) if location_en else 'వార్త'
 
@@ -1017,8 +930,8 @@ def _run_planner():
                                 f"(bulletin build still in progress)"
                             )
                             threading.Thread(
-                                # target=_send_bulletin_items_to_api,
-                                args=([item_dict], segments_url, bulletin_dir),
+                                target=_send_bulletin_items_to_api,
+                                args=([item_dict],),
                                 daemon=True,
                                 name=f"incident-rank-{rank}"
                             ).start()
@@ -1082,14 +995,47 @@ def _run_planner():
                     _s3_key = _s3_ws.key_for_bulletin_video(
                         _re.sub(r'[^\w\-]', '_', _chan).title(), _bul_name
                     )
-                    _s3_ws.upload_file_async(video_path, _s3_key)
+                    _s3_video_url = _s3_ws.public_url(_s3_key)
+
+                    def _on_upload_done(_bdir=bulletin_dir, _vurl=_s3_video_url,
+                                        _mf=_manifest, _sk=_s3_key,
+                                        _loc_id=info.get('location_id', 0),
+                                        _loc_name=info.get('location_name', ''),
+                                        _bname=_bul_name):
+                        try:
+                            import db as _db_bul
+                            import json as _json
+                            _db_bul.execute("""
+                                INSERT INTO bulletins
+                                    (bulletin_name, location_id, location_name,
+                                     item_count, duration_min, s3_key_video,
+                                     storage_key, status, manifest, created_at)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                ON CONFLICT (bulletin_name) DO UPDATE SET
+                                    s3_key_video = EXCLUDED.s3_key_video,
+                                    storage_key  = EXCLUDED.storage_key,
+                                    status       = 'ready'
+                            """, (
+                                _bname,
+                                _loc_id,
+                                _loc_name,
+                                _mf.get('item_count', 0),
+                                _mf.get('duration_minutes', 10),
+                                _sk,
+                                _vurl,
+                                'ready',
+                                _json.dumps(_mf, ensure_ascii=False)[:4000],
+                                _mf.get('created_at', datetime.now().isoformat()),
+                            ))
+                            logger.info(f"✅ [DB] Bulletin saved: {_bname}")
+                        except Exception as _dbe:
+                            logger.warning(f"⚠️ Bulletin DB insert failed: {_dbe}")
+                        _send_bulletin_to_api(_bdir, _vurl, _mf)
+
+                    _s3_ws.upload_file_async(video_path, _s3_key, on_complete=_on_upload_done)
                     logger.info(f"📤 [S3] Bulletin video upload queued: {_s3_key}")
                 except Exception as _s3e:
                     logger.warning(f"⚠️ S3 bulletin upload enqueue failed: {_s3e}")
-
-            # ── POST full bulletin video to Bulletins API (uncomment when needed) ──
-            # _send_bulletin_to_api(bulletin_dir, video_path, _manifest)
-            print(f"📤 Payload preview (would send to API): {json.dumps(_manifest, ensure_ascii=False)[:1000]}...")
 
         # ── Auto-trigger: sirf tab jab build successful ho aur genuinely NEW items hon ──
         # Condition: used_count=0 AND next_bulletin=0
