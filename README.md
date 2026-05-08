@@ -207,13 +207,41 @@ The server starts on port `8000` by default (`PORT` env var to override).
 
 ## API Endpoints
 
+### WhatsApp Webhook (Gupshup)
+
+All four routes accept the same Gupshup payload — use whichever matches your webhook configuration:
+
 | Method | Endpoint | Description |
 |---|---|---|
-| POST | `/webhook/gupshup` | Gupshup WhatsApp webhook |
-| POST | `/api/webhooks/report` | Single report submission |
-| POST | `/api/webhooks/batch` | Batch report submission |
-| POST | `/trigger-build` | Manual bulletin build trigger |
-| GET | `/api/media/<path>` | Serve local media files |
+| POST | `/` | Gupshup WhatsApp webhook (root) |
+| POST | `/webhook` | Gupshup WhatsApp webhook |
+| POST | `/gupshup/webhook` | Gupshup WhatsApp webhook |
+| POST | `/whatsapp/webhook` | Gupshup WhatsApp webhook |
+
+### Report / Incident Ingestion
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/api/webhooks/reports` | Single report submission (LocalAI TV app) |
+| POST | `/api/webhooks/batch` | Batch submission — up to 3 items in one request |
+| POST | `/api/feed` | Submit a raw incident (stores to CloudSQL `incidents` table) |
+| GET | `/api/feed?page=1&limit=20` | List incidents paginated from CloudSQL |
+
+**Batch payload format (`/api/webhooks/batch`):**
+```json
+{
+  "items": [
+    { "text": "caption", "media_url": "https://...", "media_type": "image|video|audio" }
+  ]
+}
+```
+
+### Media & Utility
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/media/<path>` | Serve local media files (outputs or inputs dir) |
+| GET | `/health` | Health check — returns `{"status": "healthy"}` |
 
 ---
 
