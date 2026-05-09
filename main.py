@@ -981,6 +981,9 @@ class NewsBot:
             'created_at': created_at if created_at else datetime.now().isoformat(),
             'category_id': category_id,
             'user_id':   user_id or '',
+            's3_key_input':        media_info.get('s3_key_input') if media_info else None,
+            's3_key_script_audio': output_files.get('s3_key_script_audio'),
+            's3_key_headline_audio': output_files.get('s3_key_headline_audio'),
         })
         logger.info(f"📋 [DEBUG] location_id={location_id} | location_address='{location_address}'")
         print(f"📋 Metadata saved [{priority.upper()}]")
@@ -1429,6 +1432,9 @@ class NewsBot:
                 'analysis_audio_filename': analysis_audio_filename,
                 'status': 'complete',
                 'original_text': combined_text,
+                's3_key_input':        media_info.get('s3_key_input') if media_info else None,
+                's3_key_script_audio': output_files.get('s3_key_script_audio'),
+                's3_key_headline_audio': output_files.get('s3_key_headline_audio'),
             })
             print(f"📋 Metadata saved [{priority.upper()}]")
  

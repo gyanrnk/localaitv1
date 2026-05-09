@@ -1979,6 +1979,17 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
             candidate = os.path.join(directory, f"{prefix}{counter}{ext}")
             if os.path.exists(candidate):
                 return candidate
+        # S3 fallback — download if missing locally
+        try:
+            import s3_storage as _s3
+            for ext in exts:
+                filename = f"{prefix}{counter}{ext}"
+                local_path = os.path.join(directory, filename)
+                s3_key = _s3.key_for_input(media_type, filename)
+                if _s3.download_file(s3_key, local_path):
+                    return local_path
+        except Exception:
+            pass
         return None
  
     valid_items = []

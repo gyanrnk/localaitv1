@@ -242,11 +242,11 @@ def append_news_item(item: Dict):
         0,
         0,
         0,
-        None,
-        None,
-        None,
-        None,
-        None,
+        item.get('s3_key_input'),
+        item.get('s3_key_script_audio'),
+        item.get('s3_key_headline_audio'),
+        item.get('storage_key'),
+        item.get('item_manifest'),
     ))
     print(f"✅ DB: news_item inserted counter={item.get('counter')} [{item.get('priority')}]")
 
@@ -478,21 +478,19 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
         if headline_audio and script_audio and os.path.exists(ha_path) and os.path.exists(sa_path):
             valid_items.append(item)
-
-        # ── Location filter ───────────────────────────────────────────────────────
-        if location_id is not None:
-            valid_items = [
-                i for i in valid_items
-                if str(i.get('location_id', '')) == str(location_id)
-            ]
-            if not valid_items:
-                print(f"❌ No items for location_id={location_id} ({location_name})")
-                return None
-            print(f"📍 Filtered {len(valid_items)} items for [{location_id}] {location_name}")
-        
         else:
-            print(f"⚠️ Skipping item {item.get('counter')} — audio files missing")
-            print(f"⚠️ Skipping item {item.get('counter')} — headline_audio='{headline_audio}' exists={os.path.exists(ha_path)} | script_audio='{script_audio}' exists={os.path.exists(sa_path)}")
+            print(f"⚠️ Skipping item {item.get('counter')} — audio files missing: headline_audio='{headline_audio}' exists={os.path.exists(ha_path)} | script_audio='{script_audio}' exists={os.path.exists(sa_path)}")
+
+    # ── Location filter ───────────────────────────────────────────────────────
+    if location_id is not None:
+        valid_items = [
+            i for i in valid_items
+            if str(i.get('location_id', '')) == str(location_id)
+        ]
+        if not valid_items:
+            print(f"❌ No items for location_id={location_id} ({location_name})")
+            return None
+        print(f"📍 Filtered {len(valid_items)} items for [{location_id}] {location_name}")
 
 
     if not valid_items:
@@ -1166,14 +1164,8 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
     with open(manifest_path, 'w', encoding='utf-8') as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-    # Upload manifest to S3 (async — does not block build)
-    safe_loc = re.sub(r'[^\w\-]', '_', (location_name or 'General').strip()).title()
-    _s3.upload_file_async(
-        manifest_path,
-        _s3.key_for_bulletin_manifest(safe_loc, bulletin_name),
-    )
-
     # Atomic rename
+    safe_loc = re.sub(r'[^\w\-]', '_', (location_name or 'General').strip()).title()
     if os.path.exists(bulletin_dir):
         old_dir = bulletin_dir + '_old'
         if os.path.exists(old_dir):
@@ -1183,6 +1175,13 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         _safe_rmtree(old_dir)
     else:
         shutil.move(temp_dir, bulletin_dir)
+
+    # Upload manifest after rename (file is now in final location)
+    final_manifest = os.path.join(bulletin_dir, 'bulletin_manifest.json')
+    _s3.upload_file_async(
+        final_manifest,
+        _s3.key_for_bulletin_manifest(safe_loc, bulletin_name),
+    )
 
     # Update used_count
     selected_counters = {item.get('counter') for item in selected}

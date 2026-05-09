@@ -34,7 +34,7 @@ INTRO_SEC = 20
 if platform.system() == "Windows":
     _BASE = os.getenv("WATCH_DIR_BASE", r"C:\\Users\\Gyanaranjan kabi\\Desktop\\temp_copy\\outputs\\bulletins")
 else:
-    _BASE = os.getenv("WATCH_DIR_BASE", "/root/localaitv1/outputs/bulletins")
+    _BASE = os.getenv("WATCH_DIR_BASE", "/root/localaitv11/localaitv1/outputs/bulletins")
 
 def _wdir(name):
     return os.getenv(f"WATCH_DIR_{name.upper()}", f"{_BASE}/{name}")
@@ -81,7 +81,7 @@ MARRIAGE_PREFIX = "marriages/outputs/"
 INJECT_CACHE_DIR = Path("s3_inject_cache")
 INJECT_CACHE_DIR.mkdir(exist_ok=True)
 
-FILLER_FILE = Path(os.getenv("FILLER_FILE", "filler.mp4"))
+FILLER_FILE = Path(os.getenv("FILLER_FILE", "assets/filler.mp4"))
 
 _train_rotation_idx = 0
 
@@ -170,11 +170,22 @@ def get_all_bulletins(folder):
 
     files = []
     for bul in bulletin_dirs[:MAX_BULLETINS_IN_ROTATION]:
-        # Only accept the exact final video: <bul_name>/<bul_name>.mp4
-        # Skip intermediates like _staging.mp4, _tickered.mp4, _tmp.mp4
         final = bul / f"{bul.name}.mp4"
-        if final.exists() and final.stat().st_size > 100_000:
-            files.append(final)
+        if not (final.exists() and final.stat().st_size > 100_000):
+            continue
+        # Skip corrupt files (missing moov atom)
+        try:
+            r = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(final)],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode != 0 or not r.stdout.strip():
+                debug(f"⚠️ Skipping corrupt bulletin: {final.name}")
+                continue
+        except Exception:
+            continue
+        files.append(final)
 
     return files
 
@@ -406,8 +417,8 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
             _train_rotation_idx += 1
             lines.append(f"file \'{str(t)}\'")
 
-    repeated = lines * 10
-    # concat_path.write_text("\\n".join(repeated) + "\\n", encoding="utf-8")
+    is_filler_only = (len(bulletins) == 1 and str(bulletins[0]) == str(FILLER_FILE))
+    repeated = lines * (500 if is_filler_only else 10)
     concat_path.write_text("\n".join(repeated) + "\n", encoding="utf-8")
     debug(f"[{label}] {concat_path.name}: {len(bulletins)} bulletins | {len(repeated)} entries")
     return concat_path
@@ -672,9 +683,11 @@ def run_streamer():
                     if proc and proc.poll() is not None:
                         debug(f"{ch['label']} DOWN ({_exit_reason(proc.returncode)}) — restart in 3s")
                         stream_down(ch["label"]); time.sleep(3)
-                        if last_buls[i] and ch["stream_key"]:
+                        if (last_buls[i] or FILLER_FILE.exists()) and ch["stream_key"]:
                             procs[i] = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"])
                             if procs[i]: monitor_ffmpeg(procs[i], ch["label"])
+                        else:
+                            procs[i] = None
 
                 if all(p is None or p.poll() is not None for p in procs):
                     debug("All streams down — outer relaunch"); break

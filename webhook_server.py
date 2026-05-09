@@ -28,7 +28,8 @@ init_db()
 
 
 import requests as _req
-from config import API_BASE_URL, BULLETIN_API_TOKEN, LOCALAITV_API_URL, BASE_DIR, OUTPUT_AUDIO_DIR, OUTPUT_HEADLINE_DIR, OUTPUT_SCRIPT_DIR
+from config import API_BASE_URL, BULLETIN_API_TOKEN, LOCALAITV_API_URL, BASE_DIR, OUTPUT_AUDIO_DIR, OUTPUT_HEADLINE_DIR, OUTPUT_SCRIPT_DIR, ensure_assets
+ensure_assets()  # download ticker4.png and other static assets if missing
 
 REPORTS_API_URL = "https://localaitv.com/api/webhooks/reports"
 
@@ -301,15 +302,15 @@ def _send_bulletin_items_to_api(items: list):
             (counters,)
         )
         for r in rows:
-            _s3_map[(r['counter'], r['media_type'])] = r
+            _s3_map[r['counter']] = r
 
     def _post_one(item):
         try:
             counter    = item.get("counter")
-            media_type = item.get("media_type", "")
             headline   = item.get("headline", "వార్త")
 
-            db_row = _s3_map.get((counter, media_type), {})
+            db_row     = _s3_map.get(counter, {})
+            media_type = item.get("media_type") or (db_row.get("media_type") if db_row else "") or ""
 
             # ── script text from S3 ──────────────────────────────────────────
             script_text = headline
