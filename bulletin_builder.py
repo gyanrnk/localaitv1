@@ -427,20 +427,36 @@ def build_all_location_bulletins(duration_minutes: int) -> dict:
     print(f"🗺️  Location mapping: {loc_to_channel}")
 
     # Bucket items by channel
-    channel_items = {"Karimnagar": [], "Khammam": [], "Kurnool": [],
-                     "Anatpur": [], "Kakinada": [], "Nalore": [], "Tirupati": []}
+    KNOWN_CHANNELS = {"Karimnagar", "Khammam", "Kurnool",
+                      "Anatpur", "Kakinada", "Nalore", "Tirupati"}
+    channel_items  = {ch: [] for ch in KNOWN_CHANNELS}
+    general_items  = []  # items that don't match any of the 7 channels
+
     for item in all_items:
-        raw = item.get('location_name', '')
-        channel = loc_to_channel.get(raw, "Kurnool")
-        channel_items[channel].append(item)
+        raw     = item.get('location_name', '')
+        channel = loc_to_channel.get(raw)
+        if channel and channel in KNOWN_CHANNELS:
+            channel_items[channel].append(item)
+        else:
+            general_items.append(item)
+
+    if general_items:
+        print(f"🌐 {len(general_items)} general items (no location match)")
 
     results = {}
     for channel_name, items in channel_items.items():
-        if not items:
+        if items:
+            # Channel ke apne items hain — sirf wahi use karo
+            use_items = items
+            print(f"\n{'='*60}\n🏗️  Building bulletin for {channel_name} ({len(items)} own items)\n{'='*60}")
+        elif general_items:
+            # Apne items nahi hain — general items fallback ke roop me use karo
+            use_items = general_items
+            print(f"\n{'='*60}\n🏗️  Building bulletin for {channel_name} (no own items — using {len(general_items)} general items)\n{'='*60}")
+        else:
             print(f"⚠️ No items for {channel_name}, skipping")
             continue
-        print(f"\n{'='*60}\n🏗️  Building bulletin for {channel_name} ({len(items)} items)\n{'='*60}")
-        path = build_bulletin(duration_minutes, location_name=channel_name, _items_override=items)
+        path = build_bulletin(duration_minutes, location_name=channel_name, _items_override=use_items)
         if path:
             results[channel_name] = {'location_name': channel_name, 'path': path}
 

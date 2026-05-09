@@ -297,7 +297,7 @@ def _send_bulletin_items_to_api(items: list):
     if counters:
         rows = _db_items.fetchall(
             "SELECT counter, media_type, s3_key_input, s3_key_script_audio, "
-            "script_filename, user_id, location_id, location_name "
+            "script_filename, user_id, location_id, location_name, incident_id "
             "FROM news_items WHERE counter = ANY(%s)",
             (counters,)
         )
@@ -311,6 +311,11 @@ def _send_bulletin_items_to_api(items: list):
 
             db_row     = _s3_map.get(counter, {})
             media_type = item.get("media_type") or (db_row.get("media_type") if db_row else "") or ""
+
+            # ── Duplicate check: already posted incident → skip ───────────────
+            if db_row.get("incident_id"):
+                logger.info(f"  ⏭️  Item {counter} already has incident_id={db_row['incident_id']} — skip")
+                return None
 
             # ── script text from S3 ──────────────────────────────────────────
             script_text = headline
@@ -333,12 +338,20 @@ def _send_bulletin_items_to_api(items: list):
                 if _s3_items.file_exists(thumb_key):
                     image_url = _s3_items.public_url(thumb_key)
 
-            # ── item video: item_cache from S3 ───────────────────────────────
+            # ── item video: item_cache from S3 (retry — async upload lag sakta hai) ──
             news_segment_url = None
             if counter is not None:
+                import time as _t
                 cache_key = _s3_items.key_for_item_cache(counter)
-                if _s3_items.file_exists(cache_key):
-                    news_segment_url = _s3_items.public_url(cache_key)
+                for _attempt in range(5):
+                    if _s3_items.file_exists(cache_key):
+                        news_segment_url = _s3_items.public_url(cache_key)
+                        break
+                    if _attempt < 4:
+                        logger.info(f"  ⏳ S3 cache not ready yet (attempt {_attempt+1}/5) — waiting 3s")
+                        _t.sleep(3)
+                if not news_segment_url:
+                    logger.warning(f"  ⚠️  Item {counter} — S3 cache not found after retries, video skipped")
 
             # ── location + user_id from DB ───────────────────────────────────
             loc_id = item.get('location_id') or (db_row.get('location_id') if db_row else None) or 1
@@ -868,6 +881,13 @@ def _run_planner():
                                 rel = os.path.relpath(segments_dir, BASE_DIR).replace('\\', '/')
                             segments_url = f"{LOCALAITV_API_URL}/api/media/{rel}"
                             logger.info(f"📂 Segments URL: {segments_url}")
+
+                        # ── Already bulletined item: incident already fired before ──
+                        already_bulletined = int(item_dict.get('bulletined', 0)) > 0
+                        if already_bulletined and not is_reused:
+                            logger.info(f"  ⏭️  [rank={rank}] Item {counter} already bulletined (used_count={item_dict.get('used_count',0)}) — incident skip")
+                            processed_ranks.add(rank)
+                            continue
 
                         # ── Reused item: sirf copy + metadata, incident skip ───
                         if is_reused:
