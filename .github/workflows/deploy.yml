@@ -92,7 +92,6 @@ jobs:
             "Dockerfile"
             "docker-compose.yml"
             "docker-compose.prod.yml"
-            "requirements.txt"
             "webhook_server.py"
             "main.py"
             "config.py"
