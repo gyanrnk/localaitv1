@@ -12,6 +12,22 @@ OPENAI_MODEL         = os.getenv('OPENAI_MODEL', 'gpt-4o')
 OPENAI_HEADLINE_MODEL = os.getenv('OPENAI_HEADLINE_MODEL', 'gpt-4o-mini')  # ADD THIS
 OPENAI_WHISPER_MODEL = os.getenv('OPENAI_WHISPER_MODEL', 'gpt-4o-transcribe')
 SARVAM_API_KEY       = os.getenv('SARVAM_API_KEY', '')
+MAX_TTS_CONCURRENCY  = int(os.getenv('MAX_TTS_CONCURRENCY', '3'))
+
+
+def get_channel_tts_provider(channel_name: str) -> str:
+    """
+    Returns 'sarvam' or 'gcp' for the given channel.
+
+    .env examples:
+        TTS_PROVIDER_KURNOOL=gcp          ← Kurnool uses GCP TTS
+        TTS_PROVIDER_KARIMNAGAR=gcp       ← Karimnagar uses GCP TTS
+        TTS_PROVIDER_DEFAULT=sarvam       ← fallback for all others (default: sarvam)
+    """
+    env_key  = f"TTS_PROVIDER_{channel_name.upper().replace(' ', '_').replace('-', '_')}"
+    provider = os.getenv(env_key, os.getenv('TTS_PROVIDER_DEFAULT', 'sarvam')).lower()
+    print(f"[TTS-CFG] channel='{channel_name}' | env_key='{env_key}' | value='{os.getenv(env_key)}' | resolved='{provider}'")
+    return provider
 
 GUPSHUP_API_KEY       = os.getenv('GUPSHUP_API_KEY', '')
 GUPSHUP_APP_NAME      = os.getenv('GUPSHUP_APP_NAME', '')

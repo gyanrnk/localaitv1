@@ -236,3 +236,71 @@ class TTSHandler:
         except Exception as e:
             print(f"TTS Error: {e}")
             return False
+
+
+# ── Channel → TTS provider factory ───────────────────────────────────────────
+
+_CHANNEL_KEYWORDS = {
+    "Karimnagar": ["karimnagar", "jagtial", "mancherial", "ramagundam"],
+    "Khammam":    ["khammam", "kothagudem", "bhadrachalam"],
+    "Kurnool":    ["kurnool", "nandyal", "proddatur"],
+    "Anatpur":    ["anantapur", "anatpur", "hindupur", "dharmavaram"],
+    "Kakinada":   ["kakinada", "rajahmundry", "eluru"],
+    "Nalore":     ["nellore", "nalore", "ongole"],
+    "Tirupati":   ["tirupati", "chittoor", "kadapa"],
+}
+
+
+def detect_channel(location_name: str) -> str:
+    """
+    Fast channel detection from a location string.
+    Reads the bulletin_builder location-cache first, then keyword matching.
+    Returns a channel name; defaults to 'Kurnool' if unknown.
+    """
+    import json
+    import os as _os
+
+    loc_lower = (location_name or "").lower()
+
+    cache_file = _os.path.join(_os.path.dirname(__file__), '.location_channel_cache.json')
+    if _os.path.exists(cache_file):
+        try:
+            with open(cache_file) as f:
+                cache = json.load(f)
+            if location_name in cache:
+                return cache[location_name]
+        except Exception:
+            pass
+
+    for channel, keywords in _CHANNEL_KEYWORDS.items():
+        if any(k in loc_lower for k in keywords):
+            print(f"[TTS-CH] location='{location_name}' → channel='{channel}' (keyword match)")
+            return channel
+    print(f"[TTS-CH] location='{location_name}' → channel='Kurnool' (default fallback)")
+    return "Kurnool"
+
+
+def get_tts_for_channel(channel_name: str, voice_counter_n: int) -> TTSHandler:
+    """
+    Factory: picks Sarvam or GCP TTS based on per-channel .env config.
+    Sets the voice counter and returns a ready TTSHandler instance.
+
+    .env config:
+        TTS_PROVIDER_KURNOOL=gcp          ← Kurnool channel uses GCP TTS
+        TTS_PROVIDER_DEFAULT=sarvam       ← all others default to Sarvam
+
+    Usage in main.py:
+        from tts_handler import detect_channel, get_tts_for_channel
+        _item_tts = get_tts_for_channel(detect_channel(location_name), voice_counter_n)
+    """
+    from config import get_channel_tts_provider
+    provider = get_channel_tts_provider(channel_name)
+    print(f"🎛️  Channel '{channel_name}' → TTS provider: {provider.upper()}")
+
+    if provider == "gcp":
+        import tts_handler_gcp as _gcp
+        _gcp.set_voice_counter(voice_counter_n)
+        return _gcp.TTSHandler.for_item()
+    else:
+        set_voice_counter(voice_counter_n)
+        return TTSHandler.for_item()

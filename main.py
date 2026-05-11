@@ -17,7 +17,7 @@ from gupshup_handler import GupshupHandler
 from file_manager import FileManager
 from media_handler import MediaHandler
 from telugu_processor import TeluguProcessor
-from tts_handler import TTSHandler, set_voice_counter
+from tts_handler import detect_channel, get_tts_for_channel
 from bulletin_builder import append_news_item
 import report_state_manager as _rsm
 from config import OUTPUT_AUDIO_DIR, REPORTER_PHOTO_DIR, ADDRESS_GIF_PATH, ensure_assets
@@ -166,8 +166,7 @@ class NewsBot:
             "SELECT COUNT(*) AS n FROM news_items WHERE counter <= %s", (counter,)
         )
         item_index = max(0, int(_idx_row[0]['n']) - 1) if _idx_row else 0
-        set_voice_counter(item_index)
-        _regen_tts = TTSHandler.for_item()
+        _regen_tts = get_tts_for_channel(detect_channel(item.get('location_name', '')), item_index)
         print(f"🎙️  [REGEN] Item {counter} voice: {_regen_tts.speaker.upper()} (index={item_index})")
  
         def _gen_if_missing(text, dest_path, label):
@@ -814,8 +813,8 @@ class NewsBot:
         #     set_voice_counter(len(_load_meta()))
         import db as _db_vc1
         _vc1_row = _db_vc1.fetchall("SELECT COUNT(*) AS n FROM news_items")
-        set_voice_counter(int(_vc1_row[0]["n"]) if _vc1_row else 0)
-        _item_tts = TTSHandler.for_item()
+        _vc1_n   = int(_vc1_row[0]["n"]) if _vc1_row else 0
+        _item_tts = get_tts_for_channel(detect_channel(location_name), _vc1_n)
         print(f"🎙️  Item voice: {_item_tts.speaker.upper()} (headline + script + intro + analysis)")
  
         def _gen_script():
@@ -1275,9 +1274,9 @@ class NewsBot:
             if has_clip_structure:
                 intro_audio_temp_path    = os.path.join(tempfile.gettempdir(), f"temp_intro_{counter}_{ts}.mp3")
                 analysis_audio_temp_path = os.path.join(tempfile.gettempdir(), f"temp_analysis_{counter}_{ts}.mp3") if analysis_script else None
-                print("🎤 Generating headline + intro + analysis TTS in parallel (Sarvam)...")
+                print("🎤 Generating headline + intro + analysis TTS in parallel...")
             else:
-                print("🎤 Generating script + headline audio in parallel (Sarvam TTS)...")
+                print("🎤 Generating script + headline audio in parallel...")
  
             print(f"[DEBUG] TTS call | counter={counter} | "
                 f"allocated_duration={media_info.get('allocated_duration')} | "
@@ -1293,8 +1292,8 @@ class NewsBot:
             #     set_voice_counter(len(_load_meta()))
             import db as _db_vc2
             _vc2_row = _db_vc2.fetchall("SELECT COUNT(*) AS n FROM news_items")
-            set_voice_counter(int(_vc2_row[0]["n"]) if _vc2_row else 0)
-            _item_tts = TTSHandler.for_item()
+            _vc2_n   = int(_vc2_row[0]["n"]) if _vc2_row else 0
+            _item_tts = get_tts_for_channel(detect_channel(location_address), _vc2_n)
             print(f"🎙️  Item voice: {_item_tts.speaker.upper()} (headline + script + intro + analysis)")
  
             def _gen_script():

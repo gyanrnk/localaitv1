@@ -944,21 +944,14 @@ def _run_planner():
                             item_dict['item_video_local'] = item_out
                             logger.info(f"  ✅ [rank={rank}] concat done in {concat_elapsed}s → {os.path.basename(item_out)}")
 
-                            # # ── Save to global item video cache ───────────────
-                            # # Next bulletin can reuse this immediately, even
-                            # # before current bulletin finishes building.
-                            # try:
-                            #     from config import ITEM_VIDEO_CACHE_DIR
-                            #     import shutil as _shc
-                            #     os.makedirs(ITEM_VIDEO_CACHE_DIR, exist_ok=True)
-                            #     cache_dst = os.path.join(
-                            #         ITEM_VIDEO_CACHE_DIR,
-                            #         f'item_{counter}_video.mp4'
-                            #     )
-                            #     _shc.copy2(item_out, cache_dst)
-                            #     logger.info(f"  💾 [CACHE] item_{counter}_video.mp4 → cache")
-                            # except Exception as _ce:
-                            #     logger.warning(f"  ⚠️  [CACHE] copy failed counter={counter}: {_ce}")
+                            # ── S3 item cache upload (full concat video) ──────
+                            if counter:
+                                try:
+                                    import s3_storage as _s3c
+                                    _s3c.upload_file_async(item_out, _s3c.key_for_item_cache(counter))
+                                    logger.info(f"  📤 [rank={rank}] S3 item cache upload queued counter={counter}")
+                                except Exception as _ce:
+                                    logger.warning(f"  ⚠️ S3 cache upload failed counter={counter}: {_ce}")
 
                             # ── Metadata update ───────────────────────────────
                             # from bulletin_builder import load_metadata, save_metadata, _metadata_lock
