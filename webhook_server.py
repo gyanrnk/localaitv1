@@ -15,7 +15,8 @@ except ImportError:
     _governor = _DummyGovernor()
 import logging
 import threading
-from time import sleep, time
+import time
+from time import sleep
 import tempfile
 import os
 from flask import send_from_directory
@@ -2068,7 +2069,6 @@ def health():
     """
     Enhanced health check with database and S3 connectivity tests.
     """
-    import time
     start_time = time.time()
     health_data = {
         'status': 'healthy',
