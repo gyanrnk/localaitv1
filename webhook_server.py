@@ -39,7 +39,32 @@ except ImportError:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     PORT     = 8000
 
-logging.basicConfig(level=logging.INFO)
+import os
+import logging
+from logging.handlers import RotatingFileHandler
+
+LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(LOGS_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOGS_DIR, 'app.log')
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+if not root_logger.handlers:
+    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s %(name)s %(message)s'
+    ))
+    file_handler.setLevel(logging.INFO)
+    root_logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(
+        '%(levelname)s %(message)s'
+    ))
+    root_logger.addHandler(console_handler)
+
 logger = logging.getLogger(__name__)
 
 logger.info(f"📁 BASE_DIR = {BASE_DIR}")
@@ -2040,7 +2065,105 @@ def webhook():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'healthy'}), 200
+    """
+    Enhanced health check with database and S3 connectivity tests.
+    """
+    import time
+    start_time = time.time()
+    health_data = {
+        'status': 'healthy',
+        'checks': {}
+    }
+    http_status = 200
+
+    # 1. Database check
+    try:
+        from db import fetchall
+        result = fetchall('SELECT 1 as check')
+        if result and result[0]['check'] == 1:
+            health_data['checks']['database'] = 'ok'
+        else:
+            health_data['checks']['database'] = 'error'
+            health_data['status'] = 'degraded'
+            http_status = 503
+    except Exception as e:
+        health_data['checks']['database'] = f'error: {str(e)[:50]}'
+        health_data['status'] = 'unhealthy'
+        http_status = 503
+
+    # 2. S3 check
+    try:
+        import boto3
+        from botocore.config import Config
+        from botocore.exceptions import ClientError
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        s3_bucket = os.getenv('S3_BUCKET_NAME', '')
+        s3_region = os.getenv('AWS_REGION', 'ap-south-2')
+        aws_access_key = os.getenv('AWS_ACCESS_KEY_ID', '')
+        aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY', '')
+        
+        if s3_bucket and aws_access_key:
+            s3 = boto3.client('s3', 
+                region_name=s3_region,
+                aws_access_key_id=aws_access_key,
+                aws_secret_access_key=aws_secret_key,
+                config=Config(signature_version='s3v4')
+            )
+            # Check if bucket exists (head_bucket doesn't require ListAllMyBuckets)
+            try:
+                s3.head_bucket(Bucket=s3_bucket)
+                health_data['checks']['s3'] = 'ok'
+            except ClientError as e:
+                error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+                if error_code == '404':
+                    health_data['checks']['s3'] = f'error: bucket_not_found'
+                elif error_code == '403':
+                    health_data['checks']['s3'] = f'error: access_denied'
+                else:
+                    health_data['checks']['s3'] = f'error: {error_code}'
+                health_data['status'] = 'degraded'
+        else:
+            health_data['checks']['s3'] = 'disabled'
+    except Exception as e:
+        health_data['checks']['s3'] = f'error: {str(e)[:50]}'
+        health_data['status'] = 'degraded'
+
+    # 3. FFmpeg check
+    import subprocess
+    import shutil
+    try:
+        # Check if ffmpeg exists in PATH
+        ffmpeg_path = shutil.which('ffmpeg')
+        if not ffmpeg_path:
+            # Try common paths
+            for path in ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg']:
+                if os.path.exists(path):
+                    ffmpeg_path = path
+                    break
+        
+        if ffmpeg_path:
+            result = subprocess.run([ffmpeg_path, '-version'], 
+                                   capture_output=True, timeout=5)
+            if result.returncode == 0:
+                health_data['checks']['ffmpeg'] = 'ok'
+            else:
+                health_data['checks']['ffmpeg'] = f'error: returncode={result.returncode}'
+        else:
+            health_data['checks']['ffmpeg'] = 'not_found'
+    except FileNotFoundError:
+        health_data['checks']['ffmpeg'] = 'not_found'
+    except PermissionError as e:
+        health_data['checks']['ffmpeg'] = f'permission_denied'
+    except Exception as e:
+        health_data['checks']['ffmpeg'] = f'error: {str(e)[:50]}'
+
+    # 4. Add response time
+    health_data['response_time_ms'] = round((time.time() - start_time) * 1000, 2)
+
+    return jsonify(health_data), http_status
 
 
 if __name__ == '__main__':

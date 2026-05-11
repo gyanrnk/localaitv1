@@ -1,0 +1,159 @@
+# ============================================================
+# LocalAI TV - GitHub Actions CI/CD
+# Deploy to Hostinger VPS on push to main
+# ============================================================
+
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Build and Test
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/localaitv
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{date 'YYYYMMDD}}-
+            type=raw,value=latest,enable=true
+
+      - name: Build and Push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Deploy to Hostinger VPS
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code (for docker-compose files only)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            docker-compose.prod.yml
+            .dockerignore
+          sparse-checkout-cone-mode: false
+
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          port: ${{ secrets.VPS_PORT }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # ============================================================
+            # DEPLOY SCRIPT - Safe Deployment
+            # This script ONLY pulls new image, does NOT modify server files
+            # ============================================================
+            
+            set -e
+            
+            echo "=========================================="
+            echo "Starting deployment..."
+            echo "=========================================="
+            
+            # Create app directory if it doesn't exist
+            mkdir -p /root/localaitv1
+            
+            # Create directories for volumes (if they don't exist)
+            # These are created on host to persist data
+            mkdir -p /root/localaitv1/inputs/images
+            mkdir -p /root/localaitv1/inputs/videos
+            mkdir -p /root/localaitv1/inputs/audios
+            mkdir -p /root/localaitv1/outputs/scripts
+            mkdir -p /root/localaitv1/outputs/headlines
+            mkdir -p /root/localaitv1/outputs/audios
+            mkdir -p /root/localaitv1/outputs/reporters
+            mkdir -p /root/localaitv1/outputs/item_video_cache
+            mkdir -p /root/localaitv1/outputs/s3_inject_cache
+            mkdir -p /root/localaitv1/outputs/bulletins
+            mkdir -p /root/localaitv1/assets/ads
+            
+            # Download docker-compose.prod.yml if not exists
+            if [ ! -f /root/localaitv1/docker-compose.prod.yml ]; then
+              echo "Downloading docker-compose.prod.yml..."
+              curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.prod.yml" \
+                -o /root/localaitv1/docker-compose.prod.yml || true
+            fi
+            
+            cd /root/localaitv1
+            
+            # Login to GitHub Container Registry
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin || true
+            
+            # Pull latest image (THIS IS THE ONLY CHANGE - new image)
+            echo "Pulling latest image..."
+            docker pull ghcr.io/${{ github.repository }}:latest
+            
+            # Tag as localaitv:latest
+            docker tag ghcr.io/${{ github.repository }}:latest localaitv:latest || true
+            
+            # Stop existing container (if running)
+            echo "Stopping existing container..."
+            docker stop localaitv_app 2>/dev/null || true
+            docker rm localaitv_app 2>/dev/null || true
+            
+            # Run new container using docker-compose
+            # This preserves all server files - only image changes
+            echo "Starting new container..."
+            docker-compose -f docker-compose.prod.yml up -d
+            
+            # Wait for container to start
+            sleep 10
+            
+            # Check container status
+            docker ps | grep localaitv_app || true
+            
+            # Clean up old images (keep current running)
+            echo "Cleaning up old images..."
+            docker image prune -f 2>/dev/null || true
+            
+            echo "=========================================="
+            echo "Deployment complete!"
+            echo "=========================================="
+
+      - name: Verify deployment
+        run: |
+          sleep 15
+          # Try to reach the server - will fail locally, but that's OK
+          # The actual verification happens on the VPS
+          echo "Deployment script completed. Verify on VPS with:"
+          echo "  curl http://72.62.241.21:8000/health"

@@ -1,0 +1,70 @@
+# ============================================================
+# LocalAI TV - Docker Compose (Production)
+# Use this on your Hostinger VPS
+# ============================================================
+
+services:
+  app:
+    image: localaitv:latest
+    container_name: localaitv_app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      # Use external CloudSQL (your current setup)
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_TYPE=postgres
+      - USE_S3=true
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=ap-south-2
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - S3_BUCKET_NAME_M=${S3_BUCKET_NAME_M}
+      - AWS_ACCESS_KEY_ID_M=${AWS_ACCESS_KEY_ID_M}
+      - AWS_SECRET_ACCESS_KEY_M=${AWS_SECRET_ACCESS_KEY_M}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SARVAM_API_KEY=${SARVAM_API_KEY}
+      - GUPSHUP_API_KEY=${GUPSHUP_API_KEY}
+      - GUPSHUP_APP_NAME=${GUPSHUP_APP_NAME}
+      - GUPSHUP_SOURCE_NUMBER=${GUPSHUP_SOURCE_NUMBER}
+      - LOCALAITV_API_URL=${LOCALAITV_API_URL}
+      - LOCALAITV_API_TOKEN=${LOCALAITV_API_TOKEN}
+      - BULLETIN_API_TOKEN=${BULLETIN_API_TOKEN}
+      - YOUTUBE_STREAMING_ENABLED=${YOUTUBE_STREAMING_ENABLED:-true}
+      - YT_STREAM_KEY=${YT_STREAM_KEY}
+      - YT_STREAM_KEY_KURNOOL=${YT_STREAM_KEY_KURNOOL}
+      - YT_STREAM_KEY_KARIMNAGAR=${YT_STREAM_KEY_KARIMNAGAR}
+      - ENABLE_PLANNER=${ENABLE_PLANNER:-true}
+      - ENABLE_REPORT_POLLER=${ENABLE_REPORT_POLLER:-true}
+      - ENABLE_RETRY=${ENABLE_RETRY:-true}
+      - ENABLE_CLEANUP=${ENABLE_CLEANUP:-true}
+      - TICKER_ENABLED=${TICKER_ENABLED:-true}
+      - BGM_ENABLED=${BGM_ENABLED:-true}
+    volumes:
+      # Mount FFmpeg from host
+      - /usr/bin/ffmpeg:/usr/bin/ffmpeg:ro
+      - /usr/bin/ffprobe:/usr/bin/ffprobe:ro
+      # Local storage
+      - ./inputs:/app/inputs
+      - ./outputs:/app/outputs
+      # Static assets
+      - ./assets:/app/assets:ro
+      - ./news_intro.mpeg:/app/news_intro.mpeg:ro
+    networks:
+      - localaitv_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; r=requests.get('http://localhost:8000/health', timeout=5); exit(0 if r.status_code==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  localaitv_network:
+    driver: bridge
