@@ -3,7 +3,7 @@
 # Deploy to Hostinger VPS on push to main
 # ============================================================
 
-name: Deploy to VPS
+name: CI/CD Pipeline
 
 on:
   push:
@@ -11,10 +11,148 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
-  # Build and Test
-  build:
+  # ============================================================
+  # Security Tests
+  # ============================================================
+  security:
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Bandit security scan
+        uses: banditsec/bandit-action@v1
+        with:
+          path: '.'
+          level: 'medium'
+          exclude: 'venv,.venv,__pycache__'
+
+      - name: Check for secrets in code
+        run: |
+          echo "Checking for hardcoded secrets..."
+          # Check for common secret patterns
+          patterns=(
+            "password\s*=\s*['\"][^'\"]{8,}['\"]"
+            "api_key\s*=\s*['\"]sk-[^'\"]{20,}['\"]"
+            "secret\s*=\s*['\"][a-zA-Z0-9]{20,}['\"]"
+            "AWS_SECRET_ACCESS_KEY\s*=\s*[A-Za-z0-9/+=]{40}"
+          )
+          for pattern in "${patterns[@]}"; do
+            if grep -rqE "$pattern" --include="*.py" --exclude-dir=venv --exclude-dir=.venv . 2>/dev/null; then
+              echo "WARNING: Potential secret found matching pattern: $pattern"
+              grep -rE "$pattern" --include="*.py" --exclude-dir=venv --exclude-dir=.venv . 2>/dev/null || true
+            fi
+          done
+          echo "Secret check complete"
+
+      - name: Check .gitignore
+        run: |
+          echo "Checking .gitignore for sensitive files..."
+          REQUIRED_ENTRIES=(".env" "*.log" "__pycache__")
+          for entry in "${REQUIRED_ENTRIES[@]}"; do
+            if ! grep -q "^$entry$" .gitignore 2>/dev/null; then
+              echo "WARNING: $entry not found in .gitignore"
+            fi
+          done
+
+      - name: Check docker-compose for secrets
+        run: |
+          echo "Checking docker-compose.yml for hardcoded secrets..."
+          # Check that DATABASE_URL uses env var, not hardcoded
+          if grep -q "DATABASE_URL=postgresql://news-ai26" docker-compose.yml 2>/dev/null; then
+            echo "ERROR: Hardcoded DATABASE_URL found in docker-compose.yml"
+            exit 1
+          fi
+          echo "Docker compose security check passed"
+
+  # ============================================================
+  # Smoke Tests
+  # ============================================================
+  smoke-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Python syntax
+        run: |
+          echo "Checking Python syntax..."
+          python3 -m py_compile webhook_server.py main.py config.py db.py 2>&1 || exit 1
+          echo "Python syntax OK"
+
+      - name: Check required files exist
+        run: |
+          echo "Checking required files..."
+          REQUIRED_FILES=(
+            "Dockerfile"
+            "docker-compose.yml"
+            "docker-compose.prod.yml"
+            "requirements.txt"
+            "webhook_server.py"
+            "main.py"
+            "config.py"
+            "db.py"
+          )
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "ERROR: Required file missing: $file"
+              exit 1
+            fi
+          done
+          echo "Required files check passed"
+
+      - name: Check Dockerfile
+        run: |
+          echo "Checking Dockerfile..."
+          if [ ! -f "Dockerfile" ]; then
+            echo "ERROR: Dockerfile not found"
+            exit 1
+          fi
+          # Check for FROM instruction
+          if ! grep -q "^FROM" Dockerfile; then
+            echo "ERROR: Dockerfile missing FROM instruction"
+            exit 1
+          fi
+          echo "Dockerfile check passed"
+
+      - name: Check docker-compose syntax
+        run: |
+          echo "Checking docker-compose syntax..."
+          # Install docker-compose if needed
+          if ! command -v docker-compose &> /dev/null; then
+            pip install docker-compose
+          fi
+          docker-compose config --quiet || exit 1
+          echo "docker-compose syntax OK"
+
+      - name: Check environment variables template
+        run: |
+          echo "Checking .env.example..."
+          if [ ! -f ".env.example" ]; then
+            echo "WARNING: .env.example not found"
+          else
+            # Check for required variables in template
+            REQUIRED_VARS=("DATABASE_URL" "OPENAI_API_KEY" "S3_BUCKET_NAME")
+            for var in "${REQUIRED_VARS[@]}"; do
+              if ! grep -q "^${var}=" .env.example 2>/dev/null; then
+                echo "WARNING: $var not in .env.example"
+              fi
+            done
+            echo ".env.example check complete"
+          fi
+
+  # ============================================================
+  # Build and Push Docker Image
+  # ============================================================
+  build:
+    needs: [security, smoke-tests]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     
     steps:
       - name: Checkout code
@@ -26,7 +164,7 @@ jobs:
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -34,10 +172,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/localaitv
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
-            type=sha,prefix={{date 'YYYYMMDD}}-
+            type=sha,prefix={{datetime 'YYYYMMDD'}}-
             type=raw,value=latest,enable=true
 
       - name: Build and Push Docker image
@@ -50,7 +188,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ============================================================
   # Deploy to Hostinger VPS
+  # ============================================================
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -79,22 +219,16 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # ============================================================
-            # DEPLOY SCRIPT - Safe Deployment
-            # This script ONLY pulls new image, does NOT modify server files
-            # ============================================================
-            
             set -e
             
             echo "=========================================="
             echo "Starting deployment..."
             echo "=========================================="
             
-            # Create app directory if it doesn't exist
+            # Create app directory
             mkdir -p /root/localaitv1
             
-            # Create directories for volumes (if they don't exist)
-            # These are created on host to persist data
+            # Create directories for volumes
             mkdir -p /root/localaitv1/inputs/images
             mkdir -p /root/localaitv1/inputs/videos
             mkdir -p /root/localaitv1/inputs/audios
@@ -107,7 +241,7 @@ jobs:
             mkdir -p /root/localaitv1/outputs/bulletins
             mkdir -p /root/localaitv1/assets/ads
             
-            # Download docker-compose.prod.yml if not exists
+            # Download docker-compose.prod.yml
             if [ ! -f /root/localaitv1/docker-compose.prod.yml ]; then
               echo "Downloading docker-compose.prod.yml..."
               curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.prod.yml" \
@@ -117,22 +251,21 @@ jobs:
             cd /root/localaitv1
             
             # Login to GitHub Container Registry
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin || true
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin || true
             
-            # Pull latest image (THIS IS THE ONLY CHANGE - new image)
+            # Pull latest image
             echo "Pulling latest image..."
-            docker pull ghcr.io/${{ github.repository }}:latest
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             
             # Tag as localaitv:latest
-            docker tag ghcr.io/${{ github.repository }}:latest localaitv:latest || true
+            docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest localaitv:latest || true
             
-            # Stop existing container (if running)
+            # Stop existing container
             echo "Stopping existing container..."
             docker stop localaitv_app 2>/dev/null || true
             docker rm localaitv_app 2>/dev/null || true
             
-            # Run new container using docker-compose
-            # This preserves all server files - only image changes
+            # Run new container
             echo "Starting new container..."
             docker-compose -f docker-compose.prod.yml up -d
             
@@ -142,7 +275,7 @@ jobs:
             # Check container status
             docker ps | grep localaitv_app || true
             
-            # Clean up old images (keep current running)
+            # Clean up old images
             echo "Cleaning up old images..."
             docker image prune -f 2>/dev/null || true
             
@@ -153,7 +286,6 @@ jobs:
       - name: Verify deployment
         run: |
           sleep 15
-          # Try to reach the server - will fail locally, but that's OK
-          # The actual verification happens on the VPS
-          echo "Deployment script completed. Verify on VPS with:"
-          echo "  curl http://72.62.241.21:8000/health"
+          echo "Deployment script completed."
+          echo "Verify on VPS with:"
+          echo "  curl http://${{ secrets.VPS_HOST }}:8000/health"
