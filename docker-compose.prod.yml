@@ -42,9 +42,6 @@ services:
       - TICKER_ENABLED=${TICKER_ENABLED:-true}
       - BGM_ENABLED=${BGM_ENABLED:-true}
     volumes:
-      # Mount FFmpeg from host
-      - /usr/bin/ffmpeg:/usr/bin/ffmpeg:ro
-      - /usr/bin/ffprobe:/usr/bin/ffprobe:ro
       # Local storage
       - ./inputs:/app/inputs
       - ./outputs:/app/outputs

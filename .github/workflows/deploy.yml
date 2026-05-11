@@ -141,6 +141,7 @@ jobs:
               | awk '{print $0"=dummy_ci_value"}' > .env
           fi
           docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.prod.yml config --quiet
           echo "docker-compose syntax OK"
 
       - name: Check environment variables template
@@ -264,6 +265,12 @@ jobs:
               exit 1
             fi
 
+            if ! grep -qE '^[[:space:]]*DATABASE_URL=.+$' .env; then
+              echo "ERROR: DATABASE_URL is missing or empty in /root/localaitv1/.env."
+              echo "Add DATABASE_URL=... to the VPS .env file before deploying."
+              exit 1
+            fi
+
             # ── Pull latest docker-compose.prod.yml ────────
             curl -fsSL \
               "https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.prod.yml" \
@@ -286,7 +293,8 @@ jobs:
             docker rm   localaitv_app 2>/dev/null || true
 
             echo "Starting new container..."
-            docker compose -f docker-compose.prod.yml up -d
+            docker compose --env-file .env -f docker-compose.prod.yml config --quiet
+            docker compose --env-file .env -f docker-compose.prod.yml up -d
 
             sleep 10
             docker ps | grep localaitv_app || echo "WARNING: container not running"
