@@ -1,4 +1,4 @@
-# test-deployment/requirements.txt
+# test-deployment
 # ============================================================
 # LocalAI TV - Telugu News Bulletin Automation
 # Required Python Packages
