@@ -38,7 +38,7 @@ try:
     from config import BASE_DIR, PORT
 except ImportError:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    PORT     = 8000
+    PORT     = 8001
 
 import os
 import logging

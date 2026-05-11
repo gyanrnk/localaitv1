@@ -17,7 +17,7 @@ GUPSHUP_API_KEY       = os.getenv('GUPSHUP_API_KEY', '')
 GUPSHUP_APP_NAME      = os.getenv('GUPSHUP_APP_NAME', '')
 GUPSHUP_SOURCE_NUMBER = os.getenv('GUPSHUP_SOURCE_NUMBER', '')
 
-PORT = os.getenv('PORT', '8000')
+PORT = os.getenv('PORT', '8001')
 
 HEYGEN_API_KEY = os.getenv('HEYGEN_API_KEY', '')
 DID_API_KEY    = os.getenv('DID_API_KEY', '')
