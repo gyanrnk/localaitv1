@@ -289,23 +289,25 @@ jobs:
               localaitv:latest || true
 
             echo "Stopping existing container..."
-            OLD_CID=$(docker ps -aq --filter "name=localaitv_app" 2>/dev/null || true)
-            if [ -n "$OLD_CID" ]; then
-              echo "Found existing container: $OLD_CID"
-              docker kill -s SIGKILL $OLD_CID 2>/dev/null || true
-              sleep 2
-              docker rm -f $OLD_CID 2>/dev/null || true
-              sleep 1
-              REMOVED_CID=$(docker ps -aq --filter "name=localaitv_app" 2>/dev/null || true)
-              if [ -n "$REMOVED_CID" ]; then
-                echo "WARNING: Container still present after kill+rm. Using docker system prune..."
-                docker rm -f $OLD_CID 2>/dev/null || true
-                docker rm -f localaitv_app 2>/dev/null || true
-              else
-                echo "Container removed successfully."
-              fi
-            else
-              echo "No existing container found."
+            ALL_CIDS=$(docker ps -aq --filter "name=localaitv_app" 2>/dev/null || true)
+            if [ -z "$ALL_CIDS" ]; then
+              ALL_CIDS=$(docker ps -aq --filter "name=localaitv_app" -a 2>/dev/null || true)
+            fi
+            for CID in $ALL_CIDS; do
+              echo "Removing container: $CID"
+              docker rm -f "$CID" 2>/dev/null || true
+            done
+            sleep 3
+            REMAINING=$(docker ps -aq --filter "name=localaitv_app" -a 2>/dev/null || true)
+            if [ -n "$REMAINING" ]; then
+              echo "WARNING: Containers still remaining: $REMAINING"
+              for CID in $REMAINING; do
+                echo "Force removing: $CID"
+                docker kill -s SIGKILL "$CID" 2>/dev/null || true
+                sleep 2
+                docker rm -f "$CID" 2>/dev/null || true
+                docker rm "$CID" 2>/dev/null || true
+              done
             fi
             echo "Starting new container..."
             docker compose --env-file .env -f docker-compose.prod.yml config --quiet
