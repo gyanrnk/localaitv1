@@ -289,14 +289,24 @@ jobs:
               localaitv:latest || true
 
             echo "Stopping existing container..."
-            for i in 1 2 3; do
-              echo "Attempt $i..."
-              docker stop -t 5 localaitv_app 2>/dev/null && break
-              echo "Graceful stop failed, forcing..."
-              docker kill -s SIGKILL localaitv_app 2>/dev/null || true
+            OLD_CID=$(docker ps -aq --filter "name=localaitv_app" 2>/dev/null || true)
+            if [ -n "$OLD_CID" ]; then
+              echo "Found existing container: $OLD_CID"
+              docker kill -s SIGKILL $OLD_CID 2>/dev/null || true
               sleep 2
-            done
-            docker rm -f localaitv_app 2>/dev/null || true
+              docker rm -f $OLD_CID 2>/dev/null || true
+              sleep 1
+              REMOVED_CID=$(docker ps -aq --filter "name=localaitv_app" 2>/dev/null || true)
+              if [ -n "$REMOVED_CID" ]; then
+                echo "WARNING: Container still present after kill+rm. Using docker system prune..."
+                docker rm -f $OLD_CID 2>/dev/null || true
+                docker rm -f localaitv_app 2>/dev/null || true
+              else
+                echo "Container removed successfully."
+              fi
+            else
+              echo "No existing container found."
+            fi
             echo "Starting new container..."
             docker compose --env-file .env -f docker-compose.prod.yml config --quiet
             docker compose --env-file .env -f docker-compose.prod.yml up -d
