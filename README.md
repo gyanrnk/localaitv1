@@ -1,5 +1,3 @@
-# testing
-
 # LocalAI TV - Telugu News Bulletin Automation
 
 Automated Telugu news production for LocalAI TV. The system ingests reporter submissions from WhatsApp/Gupshup and the LocalAI TV reports API, generates Telugu scripts and headlines, creates Sarvam TTS audio, builds FFmpeg video bulletins, uploads artifacts to S3, and rotates channel-specific bulletins into YouTube Live streams.
