@@ -236,14 +236,12 @@ jobs:
               curl -fsSL https://get.docker.com | sh
               systemctl enable docker
               systemctl start docker
-              echo "Docker installed"
             else
               echo "Docker OK: $(docker --version)"
             fi
 
             # ── Install Docker Compose v2 if missing ───────
             if ! docker compose version &>/dev/null; then
-              echo "Docker Compose v2 not found — installing..."
               mkdir -p /usr/local/lib/docker/cli-plugins
               curl -SL \
                 https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
@@ -261,13 +259,10 @@ jobs:
             # ── .env guard ─────────────────────────────────
             if [ ! -f .env ]; then
               echo "ERROR: /root/localaitv1/.env not found."
-              echo "SSH into the VPS and create it manually before deploying."
               exit 1
             fi
-
             if ! grep -qE '^[[:space:]]*DATABASE_URL=.+$' .env; then
-              echo "ERROR: DATABASE_URL is missing or empty in /root/localaitv1/.env."
-              echo "Add DATABASE_URL=... to the VPS .env file before deploying."
+              echo "ERROR: DATABASE_URL missing in .env"
               exit 1
             fi
 
@@ -280,24 +275,66 @@ jobs:
             echo "${{ secrets.GITHUB_TOKEN }}" | \
               docker login ghcr.io -u ${{ github.actor }} --password-stdin || true
 
-            # ── Pull & deploy ──────────────────────────────
+            # ── Pull latest image ──────────────────────────
             echo "Pulling latest image..."
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-
             docker tag \
               ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
               localaitv:latest || true
 
-            echo "Stopping existing container..."
-            docker stop localaitv_app 2>/dev/null || true
-            docker rm   localaitv_app 2>/dev/null || true
+            # ── Tear down existing containers ──────────────
+            echo "Stopping existing containers..."
 
+            # Attempt 1: graceful compose down (preferred)
+            if docker compose --env-file .env -f docker-compose.prod.yml down --timeout 15 2>/dev/null; then
+              echo "Compose down succeeded."
+            else
+              echo "Compose down failed — attempting direct rm..."
+
+              # Attempt 2: force-remove by name
+              CIDS=$(docker ps -aq --filter "name=localaitv_app" 2>/dev/null || true)
+              for CID in $CIDS; do
+                docker stop  "$CID" 2>/dev/null || true
+                docker rm -f "$CID" 2>/dev/null || true
+              done
+
+              # Attempt 3: if containers STILL exist, restart Docker daemon
+              REMAINING=$(docker ps -aq --filter "name=localaitv_app" 2>/dev/null || true)
+              if [ -n "$REMAINING" ]; then
+                echo "WARNING: permission denied on rm — restarting Docker daemon to clear stuck containers..."
+                systemctl restart docker
+                sleep 8
+                echo "Docker daemon restarted."
+              fi
+            fi
+
+            # Confirm clean slate
+            STILL_RUNNING=$(docker ps -q --filter "name=localaitv_app" 2>/dev/null || true)
+            if [ -n "$STILL_RUNNING" ]; then
+              echo "ERROR: localaitv_app still running after all removal attempts. Aborting."
+              exit 1
+            fi
+            
+            echo "Container slate is clean."
+            # ── Free port 8001 if still bound ─────────────
+            echo "Checking port 8001..."
+            PORT_PID=$(ss -tlnp | awk '/:8001 /{match($NF,/pid=([0-9]+)/,a); print a[1]}')
+            if [ -n "$PORT_PID" ]; then
+              echo "Port 8001 held by PID $PORT_PID — killing..."
+              kill -9 "$PORT_PID" 2>/dev/null || true
+              sleep 2
+              echo "Port 8001 freed."
+            else
+              echo "Port 8001 is free."
+            fi
+
+            # ── Start new container ────────────────────────
             echo "Starting new container..."
             docker compose --env-file .env -f docker-compose.prod.yml config --quiet
             docker compose --env-file .env -f docker-compose.prod.yml up -d
 
             sleep 10
-            docker ps | grep localaitv_app || echo "WARNING: container not running"
+            docker ps | grep localaitv_app || echo "WARNING: container not running after start"
 
             docker image prune -f 2>/dev/null || true
 
