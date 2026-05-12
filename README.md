@@ -1,4 +1,4 @@
-# testing user sudo privileges to run docker commands
+# testing
 
 # LocalAI TV - Telugu News Bulletin Automation
 
