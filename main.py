@@ -22,7 +22,7 @@ from bulletin_builder import append_news_item
 import report_state_manager as _rsm
 from config import OUTPUT_AUDIO_DIR, REPORTER_PHOTO_DIR, ADDRESS_GIF_PATH, ensure_assets
 ensure_assets()  # download missing static assets from S3 on startup
-from openai_handler import OpenAIHandler
+from openai_handler import OpenAIHandler, get_llm_handler
 from clip_analyzer import get_structure_decision, should_use_clip_first
  
  
@@ -133,7 +133,7 @@ class NewsBot:
             print(f"  [REGEN] Script file found for item {counter}")
         elif item.get('original_text'):
             print(f"  [REGEN] Regenerating script for item {counter}")
-            script = self.groq.generate_news_script(item['original_text'])
+            script = get_llm_handler(item.get('location_name', '')).generate_news_script(item['original_text'])
             if script:
                 script = self.telugu.convert_numbers_in_text(script)
                 script = self.telugu.clean_script(script)
@@ -148,7 +148,7 @@ class NewsBot:
             return False
  
         # ── Step 2: Headline ─────────────────────────────────────────────────────
-        headline = item.get('headline') or self.groq.generate_headline(script)
+        headline = item.get('headline') or get_llm_handler(item.get('location_name', '')).generate_headline(script)
  
         # ── Step 3: TTS — missing audio files regenerate karo ────────────────────
         import tempfile, concurrent.futures
@@ -722,7 +722,7 @@ class NewsBot:
                             best_clip_start = clip_gs
                             best_clip_end   = clip_ge
  
-                        full_script = self.groq.generate_news_script(combined_text, target_words=target_words)
+                        full_script = get_llm_handler(location_name).generate_news_script(combined_text, target_words=target_words)
                         intro_script, analysis_script = _smart_split(full_script)
                         script          = full_script
                         structure_analysis = {
@@ -733,17 +733,17 @@ class NewsBot:
                         }
                     else:
                         print("⚠️ No valid clip found — plain script")
-                        script = self.groq.generate_news_script(combined_text, target_words=target_words)
+                        script = get_llm_handler(location_name).generate_news_script(combined_text, target_words=target_words)
                         structure_analysis = None
  
             except Exception as e:
                 print(f"⚠️ Editorial planner error: {e} — falling back")
-                script = self.groq.generate_news_script(combined_text, target_words=target_words)
+                script = get_llm_handler(location_name).generate_news_script(combined_text, target_words=target_words)
                 structure_analysis = None
         else:
             # No videos — image/audio only
             print("📝 No videos — generating script from text/transcript")
-            script = self.groq.generate_news_script(combined_text, target_words=target_words)
+            script = get_llm_handler(location_name).generate_news_script(combined_text, target_words=target_words)
             structure_analysis = None
  
         if not script:
@@ -763,7 +763,7 @@ class NewsBot:
             analysis_script = self.telugu.remove_media_references(analysis_script)  # ← add
  
         # ── Headline ──────────────────────────────────────────────────────────
-        headline = self.groq.generate_headline(script) or "వార్త"
+        headline = get_llm_handler(location_name).generate_headline(script) or "వార్త"
  
         # ── Stage 3 checkpoint: script + headline done ────────────────────────
         if report_id:
@@ -1102,7 +1102,7 @@ class NewsBot:
  
                         if fallback_clip and (fallback_clip['end'] - fallback_clip['start']) >= 5.0:
                             combined        = self._combine_text_and_transcript(text, transcript)
-                            full_script     = self.groq.generate_news_script(combined, target_words=target_words)
+                            full_script     = get_llm_handler(location_address).generate_news_script(combined, target_words=target_words)
                             intro_script, analysis_script = _smart_split(full_script)
                             script          = full_script
                             structure_analysis = {
@@ -1129,7 +1129,7 @@ class NewsBot:
                             clip_e   = max(clip_s + 8.0, clip_raw)        # enforce min 8s
                             clip_e   = min(clip_e, v_dur)   
                             combined    = self._combine_text_and_transcript(text, transcript)
-                            full_script = self.groq.generate_news_script(combined, target_words=target_words)
+                            full_script = get_llm_handler(location_address).generate_news_script(combined, target_words=target_words)
                             intro_script, analysis_script = _smart_split(full_script)
                             script = full_script
                             structure_analysis = {
@@ -1143,7 +1143,7 @@ class NewsBot:
                 except Exception as e:
                     print(f"⚠️ Editorial planner error: {e} — falling back")
                     combined           = self._combine_text_and_transcript(text, transcript)
-                    script             = self.groq.generate_news_script(combined, target_words=target_words)
+                    script             = get_llm_handler(location_address).generate_news_script(combined, target_words=target_words)
                     structure_analysis = None
             else:
                 # ── FIX 1: No segments at all — time-based clip, no transcript needed ──
@@ -1162,7 +1162,7 @@ class NewsBot:
                 clip_e   = max(clip_s + 8.0, clip_raw)        # enforce min 8s
                 clip_e   = min(clip_e, v_dur) 
                 combined    = self._combine_text_and_transcript(text, transcript)
-                full_script = self.groq.generate_news_script(combined, target_words=target_words)
+                full_script = get_llm_handler(location_address).generate_news_script(combined, target_words=target_words)
                 intro_script, analysis_script = _smart_split(full_script)
                 script = full_script
                 structure_analysis = {
@@ -1181,11 +1181,11 @@ class NewsBot:
             if transcript:
                 combined = self._combine_text_and_transcript(text, transcript)
                 print("📝 Generating script from text + audio transcript...")
-                script = self.groq.generate_news_script(combined, target_words=target_words)
+                script = get_llm_handler(location_address).generate_news_script(combined, target_words=target_words)
             else:
                 print("⚠️ Transcription failed — falling back to text only")
                 if text and text.strip():
-                    script = self.groq.generate_news_script(text, target_words=target_words)
+                    script = get_llm_handler(location_address).generate_news_script(text, target_words=target_words)
  
         # ─── IMAGE ───────────────────────────────────────────────────────────
         elif media_type == 'image':
@@ -1196,17 +1196,17 @@ class NewsBot:
                 if transcript:
                     combined = self._combine_text_and_transcript(text, transcript)
                     print("📝 Generating script from audio transcript...")
-                    script = self.groq.generate_news_script(combined, target_words=target_words)
+                    script = get_llm_handler(location_address).generate_news_script(combined, target_words=target_words)
                 else:
                     print("⚠️ Audio transcription failed — falling back to text only")
                     if text and text.strip():
-                        script = self.groq.generate_news_script(text, target_words=target_words)
+                        script = get_llm_handler(location_address).generate_news_script(text, target_words=target_words)
                     else:
                         result['error'] = "Image+Audio received but transcription failed and no text provided"
                         return result
             elif text and text.strip():
                 print("🖼️ Image saved. Generating script from TEXT only...")
-                script = self.groq.generate_news_script(text, target_words=target_words)
+                script = get_llm_handler(location_address).generate_news_script(text, target_words=target_words)
             else:
                 result['error'] = "Image received but no text or audio provided — skipping"
                 print("❌ Image with no text or audio — skipping")
@@ -1215,7 +1215,7 @@ class NewsBot:
         # ─── TEXT ONLY ───────────────────────────────────────────────────────
         elif text and text.strip():
             print("📝 Generating script from text only...")
-            script = self.groq.generate_news_script(text, target_words=target_words)
+            script = get_llm_handler(location_address).generate_news_script(text, target_words=target_words)
  
         else:
             result['error'] = "No valid content to process"
@@ -1239,7 +1239,7 @@ class NewsBot:
             analysis_script = self.telugu.clean_script(analysis_script)
  
         print("📰 Generating headline...")
-        headline = self.groq.generate_headline(script)
+        headline = get_llm_handler(location_address).generate_headline(script)
         if not headline:
             print("⚠️ Headline generation failed — using default")
             headline = "వార్త"

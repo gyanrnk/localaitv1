@@ -15,6 +15,8 @@ from config import (
     OPENAI_MODEL,
     OPENAI_HEADLINE_MODEL,
     OPENAI_WHISPER_MODEL,
+    GEMINI_API_KEY,
+    GEMINI_MODEL,
     TELUGU_NEWS_SCRIPT_PROMPT,
     TELUGU_HEADLINE_PROMPT,
 )
@@ -147,17 +149,31 @@ class OpenAIHandler:
     def transcribe_audio(self, audio_path: str) -> dict:
         try:
             with open(audio_path, 'rb') as f:
+                audio_bytes = f.read()
+
+            # Try verbose_json first (timestamps); fall back to json if model rejects it
+            import io
+            try:
                 response = self.client.audio.transcriptions.create(
                     model=self.whisper_model,
-                    file=f,
+                    file=('audio.mp3', io.BytesIO(audio_bytes)),
                     response_format='verbose_json',
                     timestamp_granularities=['segment'],
                 )
+                segments = [
+                    {'start': s.start, 'end': s.end, 'text': s.text}
+                    for s in (getattr(response, 'segments', None) or [])
+                ]
+            except Exception:
+                response = self.client.audio.transcriptions.create(
+                    model=self.whisper_model,
+                    file=('audio.mp3', io.BytesIO(audio_bytes)),
+                    response_format='json',
+                )
+                segments = []
+
             text = getattr(response, 'text', '') or ''
-            segments = [
-                {'start': s.start, 'end': s.end, 'text': s.text}
-                for s in (getattr(response, 'segments', None) or [])
-            ]
+
             # fallback: if model returns no segments, estimate from words
             if text.strip() and not segments:
                 words, WPS, t = text.strip().split(), 2.2, 0.0
@@ -214,4 +230,78 @@ class OpenAIHandler:
             return resp.choices[0].message.content.strip()
         except:
             return text
-    
+
+
+class GeminiHandler:
+    """Gemini API handler — same interface as OpenAIHandler for script/headline generation."""
+
+    def __init__(self):
+        if not GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY not set in .env")
+        self.client = OpenAI(
+            api_key=GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        )
+        self.model          = GEMINI_MODEL
+        self.headline_model = GEMINI_MODEL
+        self._semaphore     = threading.Semaphore(1)
+
+    def generate_news_script(self, input_text: str, structure_hint: dict = None, target_words: int = None) -> Optional[str]:
+        system_prompt = TELUGU_NEWS_SCRIPT_PROMPT + (
+            "\n\nCRITICAL: The input content may be in ANY language (Urdu, Hindi, English, etc.). "
+            "You MUST translate and rewrite everything into professional Telugu script only. "
+            "NEVER output any Urdu, Hindi, Arabic, or English words in the script. "
+            "Every single word of output must be in Telugu script (తెలుగు)."
+        )
+        if target_words:
+            system_prompt += (
+                f"\n\nTARGET LENGTH: Approximately {target_words} words. "
+                f"Complete the story naturally within this length — proper ending mandatory, no abrupt cuts."
+            )
+        try:
+            with self._semaphore:
+                time.sleep(1.0)
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": input_text},
+                    ],
+                    temperature=0.3,
+                    max_tokens=2000,
+                )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"❌ Gemini script generation error: {e}")
+            return None
+
+    def generate_headline(self, script: str) -> Optional[str]:
+        try:
+            with self._semaphore:
+                time.sleep(1.0)
+                response = self.client.chat.completions.create(
+                    model=self.headline_model,
+                    messages=[
+                        {"role": "system", "content": TELUGU_HEADLINE_PROMPT +
+                         "\n\nCRITICAL: Headline must be maximum 5-7 words only. Short and punchy. No long sentences."},
+                        {"role": "user",   "content": f"News Script:\n\n{script}"},
+                    ],
+                    temperature=0.3,
+                    max_tokens=50,
+                )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"❌ Gemini headline generation error: {e}")
+            return None
+
+
+_KURNOOL_KEYWORDS = {'kurnool', 'కర్నూల్', 'kurnool tv', 'kurnooltv'}
+
+def get_llm_handler(location_name: str):
+    """Returns GeminiHandler for Kurnool, OpenAIHandler for all others."""
+    if location_name and location_name.lower().split(',')[0].strip() in _KURNOOL_KEYWORDS:
+        if GEMINI_API_KEY:
+            return GeminiHandler()
+        print("⚠️  GEMINI_API_KEY not set — falling back to OpenAI for Kurnool")
+    return OpenAIHandler()
+

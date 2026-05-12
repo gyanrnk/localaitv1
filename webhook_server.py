@@ -700,6 +700,7 @@ def _concat_item_segments(rank: int, segments_dir: str, out_path: str) -> bool:
             os.unlink(list_file)
 
 def _run_planner():
+    from time import time  # module-level time se conflict avoid karo
     global _last_count
 
     if not _building_lock.acquire(blocking=False):
@@ -1733,18 +1734,30 @@ def local_incident_get():
     try:
         import db
 
-        page   = int(request.args.get('page', 1))
-        limit  = int(request.args.get('limit', 20))
-        offset = (page - 1) * limit
+        page    = int(request.args.get('page', 1))
+        limit   = int(request.args.get('limit', 20))
+        offset  = (page - 1) * limit
+        user_id = request.args.get('user_id', None)
 
-        total_row = db.fetchall("SELECT COUNT(*) as total FROM incidents")
-        total     = total_row[0]['total'] if total_row else 0
+        if user_id:
+            total_row = db.fetchall("SELECT COUNT(*) as total FROM incidents WHERE user_id = %s", (user_id,))
+        else:
+            total_row = db.fetchall("SELECT COUNT(*) as total FROM incidents")
+        total = total_row[0]['total'] if total_row else 0
 
-        rows = db.fetchall("""
-            SELECT * FROM incidents
-            ORDER BY received_at DESC
-            LIMIT %s OFFSET %s
-        """, (limit, offset))
+        if user_id:
+            rows = db.fetchall("""
+                SELECT * FROM incidents
+                WHERE user_id = %s
+                ORDER BY received_at DESC
+                LIMIT %s OFFSET %s
+            """, (user_id, limit, offset))
+        else:
+            rows = db.fetchall("""
+                SELECT * FROM incidents
+                ORDER BY received_at DESC
+                LIMIT %s OFFSET %s
+            """, (limit, offset))
 
         data = [
             {

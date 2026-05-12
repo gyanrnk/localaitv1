@@ -7,11 +7,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-OPENAI_API_KEY       = os.getenv('OPENAI_API_KEY', '')
-OPENAI_MODEL         = os.getenv('OPENAI_MODEL', 'gpt-4o')
-OPENAI_HEADLINE_MODEL = os.getenv('OPENAI_HEADLINE_MODEL', 'gpt-4o-mini')  # ADD THIS
-OPENAI_WHISPER_MODEL = os.getenv('OPENAI_WHISPER_MODEL', 'gpt-4o-transcribe')
-SARVAM_API_KEY       = os.getenv('SARVAM_API_KEY', '')
+OPENAI_API_KEY        = os.getenv('OPENAI_API_KEY', '')
+OPENAI_MODEL          = os.getenv('OPENAI_MODEL', 'gpt-4o')
+OPENAI_HEADLINE_MODEL = os.getenv('OPENAI_HEADLINE_MODEL', 'gpt-4o-mini')
+OPENAI_WHISPER_MODEL  = os.getenv('OPENAI_WHISPER_MODEL', 'gpt-4o-transcribe')
+GEMINI_API_KEY        = os.getenv('GEMINI_API_KEY', '')
+GEMINI_MODEL          = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+SARVAM_API_KEY        = os.getenv('SARVAM_API_KEY', '')
 MAX_TTS_CONCURRENCY  = int(os.getenv('MAX_TTS_CONCURRENCY', '3'))
 
 
