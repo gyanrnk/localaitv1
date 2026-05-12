@@ -248,6 +248,9 @@ _CHANNEL_KEYWORDS = {
     "Kakinada":   ["kakinada", "rajahmundry", "eluru"],
     "Nalore":     ["nellore", "nalore", "ongole"],
     "Tirupati":   ["tirupati", "chittoor", "kadapa"],
+    "Guntur":     ["guntur", "tenali", "narasaraopet", "palnadu"],
+    "Warangal":   ["warangal", "hanamkonda", "kazipet", "jangaon"],
+    "Nalgonda":   ["nalgonda", "miryalaguda", "suryapet", "kodad"],
 }
 
 

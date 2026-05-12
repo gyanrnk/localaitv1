@@ -428,7 +428,8 @@ def build_all_location_bulletins(duration_minutes: int) -> dict:
 
     # Bucket items by channel
     KNOWN_CHANNELS = {"Karimnagar", "Khammam", "Kurnool",
-                      "Anatpur", "Kakinada", "Nalore", "Tirupati"}
+                      "Anatpur", "Kakinada", "Nalore", "Tirupati",
+                      "Guntur", "Warangal", "Nalgonda"}
     channel_items  = {ch: [] for ch in KNOWN_CHANNELS}
     general_items  = []  # items that don't match any of the 7 channels
 

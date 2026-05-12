@@ -17,6 +17,26 @@ SARVAM_API_KEY        = os.getenv('SARVAM_API_KEY', '')
 MAX_TTS_CONCURRENCY  = int(os.getenv('MAX_TTS_CONCURRENCY', '3'))
 
 
+def get_channel_intro_path(channel_name: str, base_dir: str = None) -> str:
+    """
+    Returns channel-specific intro video path.
+    Looks for assets/intro_{channel_lower}.mp4 first, falls back to assets/intro4.mp4.
+
+    File naming convention on VPS:
+        assets/intro_kurnool.mp4
+        assets/intro_guntur.mp4
+        assets/intro_warangal.mp4
+        assets/intro_nalgonda.mp4
+        assets/intro4.mp4          <- default fallback
+    """
+    _base = base_dir or BASE_DIR
+    channel_key = channel_name.lower().replace(' ', '_').replace('-', '_')
+    specific = os.path.join(_base, 'assets', f'intro_{channel_key}.mp4')
+    if os.path.exists(specific):
+        return specific
+    return os.path.join(_base, 'assets', 'intro4.mp4')
+
+
 def get_channel_tts_provider(channel_name: str) -> str:
     """
     Returns 'sarvam' or 'gcp' for the given channel.

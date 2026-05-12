@@ -1,3 +1,9 @@
+import sys as _sys
+if hasattr(_sys.stdout, 'reconfigure'):
+    _sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(_sys.stderr, 'reconfigure'):
+    _sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 from datetime import datetime
 import shutil
 from flask import Flask, json, request, jsonify
@@ -13,6 +19,7 @@ except ImportError:
     class _DummyGovernor:
         def wait_for_slot(self, desc=""): pass
     _governor = _DummyGovernor()
+
 import logging
 import threading
 from time import time
@@ -32,7 +39,27 @@ import requests as _req
 from config import API_BASE_URL, BULLETIN_API_TOKEN, LOCALAITV_API_URL, BASE_DIR, OUTPUT_AUDIO_DIR, OUTPUT_HEADLINE_DIR, OUTPUT_SCRIPT_DIR, ensure_assets
 ensure_assets()  # download ticker4.png and other static assets if missing
 
-REPORTS_API_URL = "https://localaitv.com/api/webhooks/reports"
+REPORTS_API_URL   = "https://localaitv.com/api/webhooks/reports"
+LOCATION_API_URL  = "https://localaitv.com/api/location"
+
+def fetch_location_details(location_uuid: str) -> dict:
+    """Fetch city/district/state from location API using UUID."""
+    if not location_uuid:
+        return {}
+    try:
+        from config import LOCALAITV_API_TOKEN
+        resp = _req.get(
+            f"{LOCATION_API_URL}/{location_uuid}",
+            headers={"Authorization": f"Bearer {LOCALAITV_API_TOKEN}"},
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data
+        logger.warning(f"location API {resp.status_code} for {location_uuid}")
+    except Exception as e:
+        logger.warning(f"Location API error: {e}")
+    return {}
 
 try:
     from config import BASE_DIR, PORT
@@ -52,14 +79,17 @@ root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 
 if not root_logger.handlers:
-    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
+    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
     file_handler.setFormatter(logging.Formatter(
         '%(asctime)s %(levelname)s %(name)s %(message)s'
     ))
     file_handler.setLevel(logging.INFO)
     root_logger.addHandler(file_handler)
 
-    console_handler = logging.StreamHandler()
+    import sys, io
+    _stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace') \
+        if hasattr(sys.stdout, 'buffer') else sys.stdout
+    console_handler = logging.StreamHandler(_stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(logging.Formatter(
         '%(levelname)s %(message)s'
@@ -748,14 +778,12 @@ def _run_planner():
 
         _base      = BASE_DIR or os.path.dirname(os.path.abspath(__file__))
         logo_path  = os.path.join(_base, 'assets', 'logo3.mov')
-        intro_path = os.path.join(_base, 'assets', 'intro4.mp4')
 
         if not os.path.exists(logo_path):
             logger.error(f"❌ logo3.mov not found at: {logo_path}")
-        if not os.path.exists(intro_path):
-            logger.error(f"❌ intro3.mp4 not found at: {intro_path}")
 
         import json as _json
+        from config import get_channel_intro_path
 
         for loc_id, info in results.items():
             bulletin_dir = info.get('path')
@@ -791,7 +819,11 @@ def _run_planner():
             # ka wait kiye bina incidents fire ho sakti hain.
             # _build_result = {'video_path': None, 'error': None}
 
-            # Yahan add karo:
+            # Per-channel intro video path
+            channel_name = info.get('location_name', '')
+            intro_path   = get_channel_intro_path(channel_name, _base)
+            logger.info(f"Intro: {os.path.basename(intro_path)} for channel '{channel_name}'")
+
             _build_done = threading.Event()
             _build_result = {'video_path': None, 'error': None}
 
@@ -842,7 +874,7 @@ def _run_planner():
             POLL_INTERVAL = 0.5   # seconds — kitni baar scan karna hai
             MAX_WAIT_SEC = 1800
             
-            t_watch_start = time.time()
+            t_watch_start = time()
             logger.info(f"⏱️  [WATCHER] Polling every {POLL_INTERVAL}s | timeout={MAX_WAIT_SEC}s | expecting {len(expected_ranks)} items")
 
             while len(processed_ranks) < len(expected_ranks):
@@ -865,7 +897,7 @@ def _run_planner():
                         break
 
                 # Timeout check
-                elapsed_watch = time.time() - t_watch_start
+                elapsed_watch = time() - t_watch_start
                 if elapsed_watch > MAX_WAIT_SEC:
                     logger.error(f"❌ [WATCHER] Timeout after {MAX_WAIT_SEC}s — processed {len(processed_ranks)}/{len(expected_ranks)}")
                     break
@@ -894,7 +926,7 @@ def _run_planner():
                         logger.info(
                             f"  📌 [rank={rank}] Marker detected "
                             f"(counter={counter}, type={mtype}, reused={is_reused}) "
-                            f"at t+{round(time.time()-t_watch_start, 1)}s into watch"
+                            f"at t+{round(time()-t_watch_start, 1)}s into watch"
                         )
 
                         # ── Build segments_url once (after segments_dir exists) ──
@@ -936,10 +968,10 @@ def _run_planner():
                             continue
 
                         # ── Fresh item: concat segments → incident fire ────────
-                        t_concat = time.time()
+                        t_concat = time()
                         logger.info(f"  🔧 [rank={rank}] concat starting...")
                         ok = _concat_item_segments(rank, segments_dir, item_out)
-                        concat_elapsed = round(time.time() - t_concat, 2)
+                        concat_elapsed = round(time() - t_concat, 2)
 
                         if ok:
                             item_dict['item_video_local'] = item_out
@@ -967,7 +999,7 @@ def _run_planner():
                             # ── TURANT incident fire — bulletin ka wait nahi ───
                             logger.info(
                                 f"  🚀 [rank={rank}] Firing incident thread at "
-                                f"t+{round(time.time()-t_watch_start, 1)}s "
+                                f"t+{round(time()-t_watch_start, 1)}s "
                                 f"(bulletin build still in progress)"
                             )
                             threading.Thread(
@@ -986,7 +1018,7 @@ def _run_planner():
                 from time import sleep as _sleep
                 _sleep(POLL_INTERVAL)
 
-            total_watch = round(time.time() - t_watch_start, 1)
+            total_watch = round(time() - t_watch_start, 1)
             logger.info(
                 f"✅ [WATCHER] Done — {len(processed_ranks)}/{len(expected_ranks)} items processed "
                 f"in {total_watch}s total watch time"
@@ -1294,7 +1326,7 @@ def cleanup_old_data_loop():
             return False  # parse na ho toh safe side — delete mat karo
 
     while True:
-        now = time.time()
+        now = time()
 
         # ── Restart-safe: last run check from CloudSQL ────────────────────────
         last_run = 0.0
@@ -1311,7 +1343,7 @@ def cleanup_old_data_loop():
             sleep(CHECK_INTERVAL)
             continue
 
-        now = time.time()
+        now = time()
         logger.info("🧹 Running 24-hour cleanup...")
 
         try:
@@ -1616,9 +1648,22 @@ def _enqueue_report(report: dict):
         except (TypeError, ValueError):
             return 0
 
-    location_id      = _safe_int(report.get('location_id') or report.get('locationId') or 0)
+    location_uuid    = report.get('locationId') or report.get('location_id') or ''
+    location_id      = _safe_int(location_uuid)
     location_address = report.get('locationAddress') or report.get('location_address', '')
     location_name    = report.get('locationName') or report.get('location_name', '')
+
+    # UUID ho toh API se city/district fetch karo
+    if location_uuid and not str(location_uuid).isdigit():
+        loc_data = fetch_location_details(str(location_uuid))
+        if loc_data:
+            city     = loc_data.get('city', '')
+            district = loc_data.get('district', '')
+            state    = loc_data.get('state', '')
+            if city:
+                location_name    = city
+                location_address = ', '.join(filter(None, [city, district, state]))
+                logger.info(f"Location resolved: {location_name} ({location_address})")
 
     logger.info(f"📋 [DEBUG] Full report payload keys: {list(report.keys())}")
     logger.info(f"📋 [DEBUG] name='{report.get('name')}' | email='{report.get('email')}' | sender_name='{name}'")
@@ -2001,7 +2046,7 @@ def receive_report_webhook():
         # Delegate directly to _enqueue_report — same logic as batch webhook
         _enqueue_report(report_data)
 
-        report_id = report_data.get('userId') or str(time.time())
+        report_id = report_data.get('userId') or str(time())
         return jsonify({'status': 'processing', 'report_id': report_id}), 200
 
     except Exception as e:
@@ -2075,7 +2120,7 @@ def health():
     """
     Enhanced health check with database and S3 connectivity tests.
     """
-    start_time = time.time()
+    start_time = time()
     health_data = {
         'status': 'healthy',
         'checks': {}
@@ -2167,7 +2212,7 @@ def health():
         health_data['checks']['ffmpeg'] = f'error: {str(e)[:50]}'
 
     # 4. Add response time
-    health_data['response_time_ms'] = round((time.time() - start_time) * 1000, 2)
+    health_data['response_time_ms'] = round((time() - start_time) * 1000, 2)
 
     return jsonify(health_data), http_status
 

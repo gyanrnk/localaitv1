@@ -55,13 +55,16 @@ STREAM_COUNT = int(os.getenv("STREAM_COUNT", "3"))
 
 # ── Channel definitions — add new channels here only ─────────────────────────
 CHANNEL_DEFS = [
-    {"name": "Khammam",    "label": "LocalAiTV",    "key_env": "YT_STREAM_KEY",            "concat": Path("concat_list_p1.txt")},
-    {"name": "Kurnool",    "label": "KurnoolTV",    "key_env": "YT_STREAM_KEY_KURNOOL",    "concat": Path("concat_list_p2.txt")},
-    {"name": "Karimnagar", "label": "KarimnagarTV", "key_env": "YT_STREAM_KEY_KARIMNAGAR", "concat": Path("concat_list_p3.txt")},
-    {"name": "Anatpur",    "label": "AnatpurTV",    "key_env": "YT_STREAM_KEY_ANATPUR",    "concat": Path("concat_list_p4.txt")},
-    {"name": "Kakinada",   "label": "KakinadaTV",   "key_env": "YT_STREAM_KEY_KAKINADA",   "concat": Path("concat_list_p5.txt")},
-    {"name": "Nalore",     "label": "NaloreTV",     "key_env": "YT_STREAM_KEY_NALORE",     "concat": Path("concat_list_p6.txt")},
-    {"name": "Tirupati",   "label": "TirupatiTV",   "key_env": "YT_STREAM_KEY_TIRUPATI",   "concat": Path("concat_list_p7.txt")},
+    {"name": "Khammam",    "label": "LocalAiTV",    "key_env": "YT_STREAM_KEY",             "concat": Path("concat_list_p1.txt")},
+    {"name": "Kurnool",    "label": "KurnoolTV",    "key_env": "YT_STREAM_KEY_KURNOOL",     "concat": Path("concat_list_p2.txt")},
+    {"name": "Karimnagar", "label": "KarimnagarTV", "key_env": "YT_STREAM_KEY_KARIMNAGAR",  "concat": Path("concat_list_p3.txt")},
+    {"name": "Anatpur",    "label": "AnatpurTV",    "key_env": "YT_STREAM_KEY_ANATPUR",     "concat": Path("concat_list_p4.txt")},
+    {"name": "Kakinada",   "label": "KakinadaTV",   "key_env": "YT_STREAM_KEY_KAKINADA",    "concat": Path("concat_list_p5.txt")},
+    {"name": "Nalore",     "label": "NaloreTV",     "key_env": "YT_STREAM_KEY_NALORE",      "concat": Path("concat_list_p6.txt")},
+    {"name": "Tirupati",   "label": "TirupatiTV",   "key_env": "YT_STREAM_KEY_TIRUPATI",    "concat": Path("concat_list_p7.txt")},
+    {"name": "Guntur",     "label": "GunturTV",     "key_env": "YT_STREAM_KEY_GUNTUR",      "concat": Path("concat_list_p8.txt")},
+    {"name": "Warangal",   "label": "WarangalTV",   "key_env": "YT_STREAM_KEY_WARANGAL",    "concat": Path("concat_list_p9.txt")},
+    {"name": "Nalgonda",   "label": "NalgondaTV",   "key_env": "YT_STREAM_KEY_NALGONDA",    "concat": Path("concat_list_p10.txt")},
 ]
 for _ch in CHANNEL_DEFS:
     _ch["watch_dir"] = _wdir(_ch["name"])
@@ -82,6 +85,17 @@ INJECT_CACHE_DIR = Path("s3_inject_cache")
 INJECT_CACHE_DIR.mkdir(exist_ok=True)
 
 FILLER_FILE = Path(os.getenv("FILLER_FILE", "assets/filler.mp4"))
+
+_SCRIPT_DIR = Path(__file__).parent
+
+def _get_intro_path(channel_name: str) -> Path | None:
+    """Return channel-specific intro, falling back to intro4.mp4."""
+    key = channel_name.lower().replace(' ', '_').replace('-', '_')
+    specific = _SCRIPT_DIR / 'assets' / f'intro_{key}.mp4'
+    if specific.exists():
+        return specific
+    default = _SCRIPT_DIR / 'assets' / 'intro4.mp4'
+    return default if default.exists() else None
 
 _train_rotation_idx = 0
 
@@ -394,6 +408,14 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
         debug(f"[{label}] No bulletins — skipping concat build")
         return concat_path
 
+    # ── Single-file loop mode: intro or filler — no mixing, just repeat ───────
+    if len(bulletins) == 1:
+        single = bulletins[0]
+        line   = f"file '{str(single)}'"
+        concat_path.write_text("\n".join([line] * 500) + "\n", encoding="utf-8")
+        debug(f"[{label}] {concat_path.name}: loop mode — {single.name} x500")
+        return concat_path
+
     vege_path   = fetch_latest_vege()
     train_clips = [t for t in fetch_train_clips() if t]
     lines       = []
@@ -417,8 +439,7 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
             _train_rotation_idx += 1
             lines.append(f"file \'{str(t)}\'")
 
-    is_filler_only = (len(bulletins) == 1 and str(bulletins[0]) == str(FILLER_FILE))
-    repeated = lines * (500 if is_filler_only else 10)
+    repeated = lines * 10
     concat_path.write_text("\n".join(repeated) + "\n", encoding="utf-8")
     debug(f"[{label}] {concat_path.name}: {len(bulletins)} bulletins | {len(repeated)} entries")
     return concat_path
@@ -574,30 +595,38 @@ def _exit_reason(rc):
 
 def _launch_streams(inject_type=None, inject_payload=None):
     MIN_BULLETINS = 5
-    filler = FILLER_FILE if FILLER_FILE.exists() else None
 
-    def _with_fallback(folder):
+    def _with_fallback(folder, channel_name):
         primary = get_all_bulletins(folder)
         if len(primary) >= MIN_BULLETINS:
             return primary
-        fallback = get_all_bulletins(_BASE)
-        seen, merged = set(), []
-        for f in primary + fallback:
-            if str(f) not in seen:
-                seen.add(str(f)); merged.append(f)
-        if not merged and filler:
-            debug(f"No bulletins in {folder} — using filler")
-            return [filler]
-        return merged
+        # Supplement with other channels' bulletins if we have some but not enough
+        if primary:
+            fallback = get_all_bulletins(_BASE)
+            seen, merged = set(), []
+            for f in primary + fallback:
+                if str(f) not in seen:
+                    seen.add(str(f)); merged.append(f)
+            if merged:
+                return merged
+        # No content at all — play this channel's intro in a loop
+        intro = _get_intro_path(channel_name)
+        if intro:
+            debug(f"[{channel_name}] No bulletins — intro loop: {intro.name}")
+            return [intro]
+        if FILLER_FILE.exists():
+            debug(f"[{channel_name}] No intro found — filler loop")
+            return [FILLER_FILE]
+        return []
 
     active = CHANNEL_DEFS[:STREAM_COUNT]
     procs  = []
     prepare_overlay()
 
     for i, ch in enumerate(active):
-        bulletins = _with_fallback(ch["watch_dir"])
+        bulletins = _with_fallback(ch["watch_dir"], ch["name"])
         if not bulletins:
-            debug(f"[{ch['label']}] No bulletins")
+            debug(f"[{ch['label']}] No bulletins and no intro — skipping")
         inj_t = inject_type    if i == 0 else None
         inj_p = inject_payload if i == 0 else None
         build_concat_list(bulletins, ch["concat"], ch["label"], inj_t, inj_p)
