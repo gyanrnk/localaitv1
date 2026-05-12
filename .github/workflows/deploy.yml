@@ -314,7 +314,19 @@ jobs:
               echo "ERROR: localaitv_app still running after all removal attempts. Aborting."
               exit 1
             fi
+            
             echo "Container slate is clean."
+            # ── Free port 8001 if still bound ─────────────
+            echo "Checking port 8001..."
+            PORT_PID=$(ss -tlnp | awk '/:8001 /{match($NF,/pid=([0-9]+)/,a); print a[1]}')
+            if [ -n "$PORT_PID" ]; then
+              echo "Port 8001 held by PID $PORT_PID — killing..."
+              kill -9 "$PORT_PID" 2>/dev/null || true
+              sleep 2
+              echo "Port 8001 freed."
+            else
+              echo "Port 8001 is free."
+            fi
 
             # ── Start new container ────────────────────────
             echo "Starting new container..."
@@ -329,7 +341,7 @@ jobs:
             echo "=========================================="
             echo "Deployment complete!"
             echo "=========================================="
-            
+
       - name: Verify deployment
         run: |
           sleep 15
