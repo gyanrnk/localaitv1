@@ -95,15 +95,17 @@ Automated Telugu news production for LocalAI TV. The system ingests reporter sub
 - **WhatsApp Ingestion**: Receive news reports via Gupshup WhatsApp webhooks
 - **API Reports**: Receive reports from LocalAI TV web application
 - **Multi-Media Support**: Process text, images, videos, and audio
-- **AI Transcription**: OpenAI Whisper for video/audio transcription
-- **AI Script Generation**: OpenAI GPT-4 powered Telugu script and headline generation
-- **Telugu TTS**: Sarvam AI Text-to-Speech with alternating voices (manan/arya)
+- **AI Transcription**: OpenAI Whisper or Groq Whisper for video/audio transcription
+- **AI Script Generation**: OpenAI GPT-4 or Gemini powered Telugu script and headline generation
+- **Telugu TTS**: Sarvam AI or Google Cloud TTS with alternating voices (male/female)
+- **Per-Channel TTS**: Configurable TTS provider per channel (Sarvam for most, GCP for some)
 - **Smart Clip Selection**: EditorialPlanner for best clip selection from videos
 - **Video Bulletin Building**: FFmpeg-powered video compilation with ticker, overlays, BGM
 - **YouTube Live Streaming**: RTMPS streaming to multiple YouTube channels
 - **PostgreSQL Database**: Full state management for items, reports, events
 - **AWS S3 Storage**: Cloud storage for media, scripts, bulletins
-- **7 Channels**: Karimnagar, Khammam, Kurnool, Anatpur, Kakinada, Nalore, Tirupati
+- **10 Channels**: Karimnagar, Khammam, Kurnool, Anatpur, Kakinada, Nalore, Tirupati, Guntur, Warangal, Nalgonda
+- **Build Queue**: Governor system for managing concurrent bulletin builds
 - **Background Processing**: Automatic polling, retry, and cleanup loops
 
 ---
@@ -353,6 +355,26 @@ BGM_ENABLED=true
 BGM_VOLUME=0.25
 ```
 
+### TTS Provider Configuration (Per-Channel)
+```env
+# Default TTS provider (sarvam or gcp)
+TTS_PROVIDER_DEFAULT=sarvam
+
+# Per-channel TTS override
+TTS_PROVIDER_KURNOOL=gcp
+TTS_PROVIDER_KARIMNAGAR=sarvam
+TTS_PROVIDER_GUNTUR=gcp
+TTS_PROVIDER_WARANGAL=gcp
+TTS_PROVIDER_NALGOND A=gcp
+```
+
+### Google/Groq API Keys
+```env
+GROQ_API_KEY=your_groq_api_key
+GEMINI_API_KEY=your_gemini_api_key
+GOOGLE_TTS_API_KEY=your_google_tts_api_key
+```
+
 ---
 
 ## Running the Project
@@ -478,17 +500,19 @@ docker-compose -f docker-compose.prod.yml up -d
 localaitv/
 ├── webhook_server.py          # Main Flask app + background threads
 ├── main.py                    # NewsBot processing pipeline
-├── bulletin_builder.py       # Select items & create bulletins
+├── bulletin_builder.py        # Select items & create bulletins
 ├── video_builder.py          # Build final video MP4
 ├── yt_streamer.py            # YouTube Live streaming
 ├── config.py                 # Configuration & paths
 ├── db.py                     # PostgreSQL connection pool
-├── openai_handler.py         # OpenAI GPT-4 & Whisper API calls
+├── openai_handler.py         # OpenAI/Groq/Gemini API calls
 ├── tts_handler.py            # Sarvam AI TTS
+├── tts_handler_gcp.py       # Google Cloud TTS
 ├── gupshup_handler.py        # WhatsApp webhook handler
 ├── file_manager.py           # File storage + S3 upload
 ├── media_handler.py          # Media file processing
 ├── telugu_processor.py       # Telugu text processing (numbers, cleaning)
+├── location_resolver.py      # Location ID/name resolution
 ├── clip_analyzer.py          # Video clip analysis for best segment
 ├── editorial_planner.py      # AI-powered story planning & clip selection
 ├── ticker_overlay.py         # Video ticker rendering
@@ -497,6 +521,7 @@ localaitv/
 ├── event_logger.py           # Audit logging to database
 ├── message_queue.py          # WhatsApp message matching
 ├── report_state_manager.py   # Report retry state tracking
+├── test_db.py                # Database testing utilities
 ├── runner.py                 # Standalone runner
 ├── fixed.py                  # Utility functions
 ├── governor/                 # Build queue & CPU management
@@ -516,7 +541,7 @@ localaitv/
 │   ├── item_video_cache/     # Cached processed videos
 │   ├── bulletins/            # Generated bulletins
 │   └── s3_inject_cache/      # S3 injection cache
-├── assets/                   # Static assets (logos, tickers)
+├── assets/                   # Static assets (logos, tickers, fonts)
 ├── Dockerfile                # Docker image build
 ├── docker-compose.yml        # Development compose
 ├── docker-compose.prod.yml   # Production compose
@@ -607,6 +632,11 @@ CREATE TABLE bulletins (
     video_url TEXT,
     thumbnail_url TEXT,
     item_count INTEGER,
+    duration_min INTEGER,
+    s3_key_video TEXT,
+    storage_key TEXT,
+    status TEXT DEFAULT 'pending',
+    manifest JSONB,
     total_duration REAL,
     created_at TIMESTAMP DEFAULT NOW()
 );
@@ -792,6 +822,27 @@ tar -xzvf localaitv-backup.tar.gz -C ./
 ### 4. Caching
 - S3 caching is automatic
 - Video cache reuses processed items
+
+---
+
+## Governor System
+
+The Governor module manages concurrent bulletin builds and CPU throttling:
+
+### Build Queue (`governor/build_queue.py`)
+- Manages concurrent bulletin video builds
+- Prevents resource exhaustion from parallel FFmpeg processes
+- Queue-based processing with configurable concurrency
+
+### CPU Governor (`governor/cpu_governor.py`)
+- Monitors CPU usage during streaming
+- Automatically throttles non-essential processes
+- Ensures stable YouTube Live streaming
+
+### Stream Registry (`governor/stream_registry.py`)
+- Tracks active stream status per channel
+- Stores stream metadata and health info
+- Enables multi-channel streaming management
 
 ---
 
