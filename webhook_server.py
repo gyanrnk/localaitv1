@@ -15,7 +15,7 @@ except ImportError:
     _governor = _DummyGovernor()
 import logging
 import threading
-import time
+from time import time
 from time import sleep
 import tempfile
 import os
@@ -367,7 +367,7 @@ def _send_bulletin_items_to_api(items: list):
             # ── item video: item_cache from S3 (retry — async upload lag sakta hai) ──
             news_segment_url = None
             if counter is not None:
-                import time as _t
+                from time import time as _t
                 cache_key = _s3_items.key_for_item_cache(counter)
                 for _attempt in range(5):
                     if _s3_items.file_exists(cache_key):
@@ -842,7 +842,7 @@ def _run_planner():
             POLL_INTERVAL = 0.5   # seconds — kitni baar scan karna hai
             MAX_WAIT_SEC = 1800
             
-            t_watch_start = time()
+            t_watch_start = time.time()
             logger.info(f"⏱️  [WATCHER] Polling every {POLL_INTERVAL}s | timeout={MAX_WAIT_SEC}s | expecting {len(expected_ranks)} items")
 
             while len(processed_ranks) < len(expected_ranks):
@@ -865,7 +865,7 @@ def _run_planner():
                         break
 
                 # Timeout check
-                elapsed_watch = time() - t_watch_start
+                elapsed_watch = time.time() - t_watch_start
                 if elapsed_watch > MAX_WAIT_SEC:
                     logger.error(f"❌ [WATCHER] Timeout after {MAX_WAIT_SEC}s — processed {len(processed_ranks)}/{len(expected_ranks)}")
                     break
@@ -894,7 +894,7 @@ def _run_planner():
                         logger.info(
                             f"  📌 [rank={rank}] Marker detected "
                             f"(counter={counter}, type={mtype}, reused={is_reused}) "
-                            f"at t+{round(time()-t_watch_start, 1)}s into watch"
+                            f"at t+{round(time.time()-t_watch_start, 1)}s into watch"
                         )
 
                         # ── Build segments_url once (after segments_dir exists) ──
@@ -936,10 +936,10 @@ def _run_planner():
                             continue
 
                         # ── Fresh item: concat segments → incident fire ────────
-                        t_concat = time()
+                        t_concat = time.time()
                         logger.info(f"  🔧 [rank={rank}] concat starting...")
                         ok = _concat_item_segments(rank, segments_dir, item_out)
-                        concat_elapsed = round(time() - t_concat, 2)
+                        concat_elapsed = round(time.time() - t_concat, 2)
 
                         if ok:
                             item_dict['item_video_local'] = item_out
@@ -967,7 +967,7 @@ def _run_planner():
                             # ── TURANT incident fire — bulletin ka wait nahi ───
                             logger.info(
                                 f"  🚀 [rank={rank}] Firing incident thread at "
-                                f"t+{round(time()-t_watch_start, 1)}s "
+                                f"t+{round(time.time()-t_watch_start, 1)}s "
                                 f"(bulletin build still in progress)"
                             )
                             threading.Thread(
@@ -986,7 +986,7 @@ def _run_planner():
                 from time import sleep as _sleep
                 _sleep(POLL_INTERVAL)
 
-            total_watch = round(time() - t_watch_start, 1)
+            total_watch = round(time.time() - t_watch_start, 1)
             logger.info(
                 f"✅ [WATCHER] Done — {len(processed_ranks)}/{len(expected_ranks)} items processed "
                 f"in {total_watch}s total watch time"
@@ -1294,7 +1294,7 @@ def cleanup_old_data_loop():
             return False  # parse na ho toh safe side — delete mat karo
 
     while True:
-        now = time()
+        now = time.time()
 
         # ── Restart-safe: last run check from CloudSQL ────────────────────────
         last_run = 0.0
@@ -1311,7 +1311,7 @@ def cleanup_old_data_loop():
             sleep(CHECK_INTERVAL)
             continue
 
-        now = time()
+        now = time.time()
         logger.info("🧹 Running 24-hour cleanup...")
 
         try:
