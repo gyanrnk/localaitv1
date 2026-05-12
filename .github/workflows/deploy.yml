@@ -289,9 +289,7 @@ jobs:
               localaitv:latest || true
 
             echo "Stopping existing container..."
-            docker stop localaitv_app 2>/dev/null || true
-            docker rm   localaitv_app 2>/dev/null || true
-
+            docker rm -f localaitv_app 2>/dev/null || true
             echo "Starting new container..."
             docker compose --env-file .env -f docker-compose.prod.yml config --quiet
             docker compose --env-file .env -f docker-compose.prod.yml up -d
