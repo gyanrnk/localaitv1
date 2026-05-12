@@ -289,22 +289,28 @@ jobs:
               localaitv:latest || true
 
             echo "Stopping existing container..."
-            ALL_CIDS=$(docker ps -aq --filter "name=localaitv_app" 2>/dev/null || true)
-            if [ -z "$ALL_CIDS" ]; then
-              ALL_CIDS=$(docker ps -aq --filter "name=localaitv_app" -a 2>/dev/null || true)
-            fi
+            echo "Current user: $(whoami)"
+            echo "Docker version: $(docker version --format '{{Server.Version}}')"
+            docker ps -a --filter "name=localaitv_app"
+            ALL_CIDS=$(docker ps -aq --filter "name=localaitv_app" -a 2>/dev/null || true)
             for CID in $ALL_CIDS; do
+              CONTAINER_STATE=$(docker inspect --format='{{.State.Status}}' "$CID" 2>/dev/null || echo "unknown")
+              echo "Container $CID state: $CONTAINER_STATE"
               echo "Removing container: $CID"
-              docker rm -f "$CID" 2>/dev/null || true
+              docker rm -f "$CID" 2>/dev/null || \
+              docker kill -s SIGKILL "$CID" 2>/dev/null && sleep 2 && docker rm -f "$CID" 2>/dev/null || true
             done
             sleep 3
+            echo "After removal:"
+            docker ps -a --filter "name=localaitv_app"
             REMAINING=$(docker ps -aq --filter "name=localaitv_app" -a 2>/dev/null || true)
             if [ -n "$REMAINING" ]; then
               echo "WARNING: Containers still remaining: $REMAINING"
               for CID in $REMAINING; do
-                echo "Force removing: $CID"
+                CONTAINER_STATE=$(docker inspect --format='{{.State.Status}}' "$CID" 2>/dev/null || echo "unknown")
+                echo "Force removing: $CID (state: $CONTAINER_STATE)"
                 docker kill -s SIGKILL "$CID" 2>/dev/null || true
-                sleep 2
+                sleep 3
                 docker rm -f "$CID" 2>/dev/null || true
                 docker rm "$CID" 2>/dev/null || true
               done
