@@ -239,6 +239,23 @@ def _get_fps(video_path: str) -> str:
     """Cache se fps return karo — ffprobe dobara nahi chalega."""
     return _probe_media(video_path)['fps']
     
+def _logo_input_args(logo_path: str, duration: float) -> list:
+    """Return correct FFmpeg input args for logo based on file type."""
+    ext = Path(logo_path).suffix.lower()
+    if ext == '.gif':
+        return ['-ignore_loop', '0', '-t', str(duration), '-i', logo_path]
+    elif ext in ('.mov', '.mp4', '.webm', '.avi'):
+        return ['-stream_loop', '-1', '-t', str(duration), '-i', logo_path]
+    else:
+        return ['-i', logo_path]
+
+
+def _logo_is_animated(logo_path: str) -> bool:
+    """True for video and GIF logos (need fps/setpts filter treatment)."""
+    ext = Path(logo_path).suffix.lower() if logo_path else ''
+    return ext in ('.mov', '.mp4', '.webm', '.avi', '.gif')
+
+
 def _run(cmd: List[str], desc: str = '') -> bool:
     print(f"  🔧 {desc or ' '.join(cmd[:4])}")
     
@@ -999,27 +1016,24 @@ def build_news_segment(media_path: str, script_audio_path: str,
     is_image = ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']
  
     logo_ext      = Path(logo_path).suffix.lower() if logo_path else ''
-    logo_is_video = logo_ext in ['.mov', '.mp4', '.webm', '.avi']
+    logo_is_video = _logo_is_animated(logo_path)
     has_logo      = bool(logo_path and os.path.exists(logo_path))
- 
+
     scale_filter = _get_scale_filter(media_path)
- 
+
     inputs      = []
     input_index = 0
- 
+
     if is_image:
         inputs += ['-loop', '1', '-t', str(duration), '-i', media_path]
     else:
         inputs += ['-stream_loop', '-1', '-t', str(duration), '-i', media_path]
     media_index  = input_index
     input_index += 1
- 
+
     logo_index = None
     if has_logo:
-        if logo_is_video:
-            inputs += ['-stream_loop', '-1', '-t', str(duration), '-i', logo_path]
-        else:
-            inputs += ['-i', logo_path]
+        inputs += _logo_input_args(logo_path, duration)
         logo_index   = input_index
         input_index += 1
  
@@ -1132,11 +1146,29 @@ def build_filler_segment(logo_path: str, duration: float, out_path: str) -> bool
         return False
  
     logo_ext = Path(logo_path).suffix.lower() if logo_path else ''
+    is_gif   = logo_ext == '.gif'
     is_video = logo_ext in ['.mp4', '.mov', '.avi', '.webm', '.mkv']
     is_image = logo_ext in ['.png', '.jpg', '.jpeg', '.webp']
+    has_logo_gif   = bool(logo_path and os.path.exists(logo_path) and is_gif)
     has_logo_img   = bool(logo_path and os.path.exists(logo_path) and is_image)
     has_logo_video = bool(logo_path and os.path.exists(logo_path) and is_video)
- 
+
+    if has_logo_gif:
+        return _run([
+            'ffmpeg', '-y',
+            '-ignore_loop', '0', '-t', str(duration), '-i', logo_path,
+            '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
+            '-vf', f'scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,'
+                   f'pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,'
+                   f'fps={FPS},format=yuv420p,setpts=PTS-STARTPTS',
+            '-map', '0:v', '-map', '1:a',
+            '-c:v', VIDEO_CODEC, '-b:v', VIDEO_BITRATE, '-maxrate', MAXRATE, '-bufsize', BUFSIZE, '-g', GOP_SIZE, '-keyint_min', GOP_SIZE, '-sc_threshold', '0', '-preset', PRESET,
+            '-c:a', AUDIO_CODEC, '-b:a', AUDIO_BITRATE, '-ar', '44100', '-ac', '2',
+            '-video_track_timescale', '12800',
+            '-t', str(duration),
+            out_path
+        ], f'Break (gif) [{duration:.2f}s]')
+
     if has_logo_video:
         return _run([
             'ffmpeg', '-y',
@@ -1151,7 +1183,7 @@ def build_filler_segment(logo_path: str, duration: float, out_path: str) -> bool
             '-t', str(duration),
             out_path
         ], f'Break (video) [{duration:.2f}s]')
- 
+
     if has_logo_img:
         return _run([
             'ffmpeg', '-y',
@@ -1499,21 +1531,18 @@ def build_image_slideshow(image_paths: List[str], audio_path: str,
     per_img_dur   = duration / n_imgs
  
     logo_ext      = Path(logo_path).suffix.lower() if logo_path else ''
-    logo_is_video = logo_ext in ['.mov', '.mp4', '.webm', '.avi']
+    logo_is_video = _logo_is_animated(logo_path)
     has_logo      = bool(logo_path and os.path.exists(logo_path))
- 
+
     if n_imgs == 1:
         # Single image — simple case
         scale = _get_scale_filter(image_paths[0])
         inputs      = ['-loop', '1', '-t', str(duration), '-i', image_paths[0]]
         input_index = 1
- 
+
         logo_index = None
         if has_logo:
-            if logo_is_video:
-                inputs += ['-stream_loop', '-1', '-t', str(duration), '-i', logo_path]
-            else:
-                inputs += ['-i', logo_path]
+            inputs += _logo_input_args(logo_path, duration)
             logo_index   = input_index
             input_index += 1
  
@@ -1819,11 +1848,10 @@ def build_multi_media_news_segment(
         # BAAD:
         _has_logo   = bool(logo_path and os.path.exists(logo_path))
         _logo_ext   = Path(logo_path).suffix.lower() if logo_path else ''
-        _logo_video = _logo_ext in ['.mov', '.mp4', '.webm', '.avi']
- 
+        _logo_video = _logo_is_animated(logo_path)
+
         if _has_logo:
-            _logo_inputs = ['-stream_loop', '-1', '-t', str(clip_final_dur), '-i', logo_path] \
-                        if _logo_video else ['-i', logo_path]
+            _logo_inputs = _logo_input_args(logo_path, clip_final_dur)
             # Logo input index: clip is input 0, logo is input 1
             _logo_in_idx = 1
             _logo_scale = (
@@ -2286,11 +2314,10 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
  
             _has_logo   = bool(logo_path and os.path.exists(logo_path))
             _logo_ext   = Path(logo_path).suffix.lower() if logo_path else ''
-            _logo_video = _logo_ext in ['.mov', '.mp4', '.webm', '.avi']
- 
+            _logo_video = _logo_is_animated(logo_path)
+
             if _has_logo:
-                _logo_inputs = (['-stream_loop', '-1', '-t', str(final_clip_dur), '-i', logo_path]
-                                if _logo_video else ['-i', logo_path])
+                _logo_inputs = _logo_input_args(logo_path, final_clip_dur)
                 _logo_scale  = (f'[1:v]scale=500:-1,fps={FPS},format=yuva420p[logo];'
                                 if _logo_video else f'[1:v]scale=500:-1,format=yuva420p[logo];')
                 _clip_trim   = f'trim={clip_start}:{clip_use_end},setpts=PTS-STARTPTS'

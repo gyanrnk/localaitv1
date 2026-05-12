@@ -777,13 +777,9 @@ def _run_planner():
             return
 
         _base      = BASE_DIR or os.path.dirname(os.path.abspath(__file__))
-        logo_path  = os.path.join(_base, 'assets', 'logo3.mov')
-
-        if not os.path.exists(logo_path):
-            logger.error(f"❌ logo3.mov not found at: {logo_path}")
 
         import json as _json
-        from config import get_channel_intro_path
+        from config import get_channel_intro_path, get_channel_logo_path
 
         for loc_id, info in results.items():
             bulletin_dir = info.get('path')
@@ -819,10 +815,11 @@ def _run_planner():
             # ka wait kiye bina incidents fire ho sakti hain.
             # _build_result = {'video_path': None, 'error': None}
 
-            # Per-channel intro video path
+            # Per-channel intro and logo paths
             channel_name = info.get('location_name', '')
             intro_path   = get_channel_intro_path(channel_name, _base)
-            logger.info(f"Intro: {os.path.basename(intro_path)} for channel '{channel_name}'")
+            logo_path    = get_channel_logo_path(channel_name, _base)
+            logger.info(f"Intro: {os.path.basename(intro_path)} | Logo: {os.path.basename(logo_path)} | channel='{channel_name}'")
 
             _build_done = threading.Event()
             _build_result = {'video_path': None, 'error': None}

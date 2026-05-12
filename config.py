@@ -37,6 +37,25 @@ def get_channel_intro_path(channel_name: str, base_dir: str = None) -> str:
     return os.path.join(_base, 'assets', 'intro4.mp4')
 
 
+def get_channel_logo_path(channel_name: str, base_dir: str = None) -> str:
+    """
+    Returns channel-specific logo path.
+    Checks .gif, .mov, .mp4 in that order, falls back to assets/logo3.mov.
+
+    File naming convention on VPS:
+        assets/logo_kurnool.gif   (or .mov / .mp4)
+        assets/logo_guntur.gif
+        assets/logo3.mov          <- default fallback
+    """
+    _base = base_dir or BASE_DIR
+    channel_key = channel_name.lower().replace(' ', '_').replace('-', '_')
+    for ext in ('.gif', '.mov', '.mp4'):
+        specific = os.path.join(_base, 'assets', f'logo_{channel_key}{ext}')
+        if os.path.exists(specific):
+            return specific
+    return os.path.join(_base, 'assets', 'logo3.mov')
+
+
 def get_channel_tts_provider(channel_name: str) -> str:
     """
     Returns 'sarvam' or 'gcp' for the given channel.
