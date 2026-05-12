@@ -289,6 +289,13 @@ jobs:
               localaitv:latest || true
 
             echo "Stopping existing container..."
+            for i in 1 2 3; do
+              echo "Attempt $i..."
+              docker stop -t 5 localaitv_app 2>/dev/null && break
+              echo "Graceful stop failed, forcing..."
+              docker kill -s SIGKILL localaitv_app 2>/dev/null || true
+              sleep 2
+            done
             docker rm -f localaitv_app 2>/dev/null || true
             echo "Starting new container..."
             docker compose --env-file .env -f docker-compose.prod.yml config --quiet
