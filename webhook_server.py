@@ -397,7 +397,6 @@ def _send_bulletin_items_to_api(items: list):
             # ── item video: item_cache from S3 (retry — async upload lag sakta hai) ──
             news_segment_url = None
             if counter is not None:
-                from time import time as _t
                 cache_key = _s3_items.key_for_item_cache(counter)
                 for _attempt in range(5):
                     if _s3_items.file_exists(cache_key):
@@ -405,7 +404,7 @@ def _send_bulletin_items_to_api(items: list):
                         break
                     if _attempt < 4:
                         logger.info(f"  ⏳ S3 cache not ready yet (attempt {_attempt+1}/5) — waiting 3s")
-                        _t.sleep(3)
+                        sleep(3)
                 if not news_segment_url:
                     logger.warning(f"  ⚠️  Item {counter} — S3 cache not found after retries, video skipped")
 

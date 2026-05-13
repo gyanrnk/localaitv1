@@ -147,16 +147,36 @@ class OpenAIHandler:
 
 
     def transcribe_audio(self, audio_path: str) -> dict:
+        import io, os, subprocess, tempfile
+
+        # Convert webm/ogg/m4a to mp3 before sending — OpenAI rejects raw webm bytes
+        _send_path = audio_path
+        _tmp_mp3   = None
+        ext = os.path.splitext(audio_path)[1].lower()
+        if ext in ('.webm', '.ogg', '.m4a', '.opus'):
+            try:
+                _tmp_mp3 = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
+                _tmp_mp3.close()
+                r = subprocess.run(
+                    ['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1',
+                     '-b:a', '64k', _tmp_mp3.name],
+                    capture_output=True, timeout=60
+                )
+                if r.returncode == 0:
+                    _send_path = _tmp_mp3.name
+            except Exception as _ce:
+                print(f"⚠️ webm→mp3 convert failed: {_ce}, sending original")
+
         try:
-            with open(audio_path, 'rb') as f:
+            send_name = os.path.basename(_send_path)
+            with open(_send_path, 'rb') as f:
                 audio_bytes = f.read()
 
             # Try verbose_json first (timestamps); fall back to json if model rejects it
-            import io
             try:
                 response = self.client.audio.transcriptions.create(
                     model=self.whisper_model,
-                    file=('audio.mp3', io.BytesIO(audio_bytes)),
+                    file=(send_name, io.BytesIO(audio_bytes)),
                     response_format='verbose_json',
                     timestamp_granularities=['segment'],
                 )
@@ -167,7 +187,7 @@ class OpenAIHandler:
             except Exception:
                 response = self.client.audio.transcriptions.create(
                     model=self.whisper_model,
-                    file=('audio.mp3', io.BytesIO(audio_bytes)),
+                    file=(send_name, io.BytesIO(audio_bytes)),
                     response_format='json',
                 )
                 segments = []
@@ -187,6 +207,10 @@ class OpenAIHandler:
         except Exception as e:
             print(f"❌ Transcription error: {e}")
             return {'text': '', 'segments': []}
+        finally:
+            if _tmp_mp3:
+                try: os.unlink(_tmp_mp3.name)
+                except: pass
 
 
     def generate_editorial_plan(self, transcript_text: str) -> str:
