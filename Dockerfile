@@ -33,6 +33,9 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH
 
+# Install Playwright Chromium browser + OS-level dependencies
+RUN playwright install chromium --with-deps
+
 # Copy application code
 COPY --chown=app:app . .
 
