@@ -40,7 +40,7 @@ from config import API_BASE_URL, BULLETIN_API_TOKEN, LOCALAITV_API_URL, BASE_DIR
 ensure_assets()  # download ticker4.png and other static assets if missing
 
 REPORTS_API_URL   = "https://localaitv.com/api/webhooks/reports"
-LOCATION_API_URL  = "https://localaitv.com/api/location"
+LOCATION_API_URL  = "https://localaitv.com/api/locations"
 
 def fetch_location_details(location_uuid: str) -> dict:
     """Fetch city/district/state from location API using UUID."""
@@ -48,17 +48,27 @@ def fetch_location_details(location_uuid: str) -> dict:
         return {}
     try:
         from config import LOCALAITV_API_TOKEN
+        url = f"{LOCATION_API_URL}/{location_uuid}"
+        logger.info(f"[LOC-API] REQUEST  → GET {url}")
+
         resp = _req.get(
-            f"{LOCATION_API_URL}/{location_uuid}",
+            url,
             headers={"Authorization": f"Bearer {LOCALAITV_API_TOKEN}"},
             timeout=8,
         )
+        logger.info(f"[LOC-API] RESPONSE → status={resp.status_code} | body={resp.text[:300]}")
+
         if resp.status_code == 200:
             data = resp.json()
+            city     = data.get('constituency') or data.get('city', '')
+            district = data.get('district', '')
+            state    = data.get('state', '')
+            logger.info(f"[LOC-API] MAPPED   → uuid={location_uuid} | city='{city}' | district='{district}' | state='{state}'")
             return data
-        logger.warning(f"location API {resp.status_code} for {location_uuid}")
+
+        logger.warning(f"[LOC-API] FAILED   → status={resp.status_code} for uuid={location_uuid}")
     except Exception as e:
-        logger.warning(f"Location API error: {e}")
+        logger.warning(f"[LOC-API] ERROR    → {e}")
     return {}
 
 try:
@@ -739,7 +749,7 @@ def _run_planner():
     try:
         logger.info("🔨 Building bulletins (all locations)...")
         from bulletin_builder import build_all_location_bulletins
-        results = build_all_location_bulletins(10)
+        results = build_all_location_bulletins(5)
 
         if not results:
             logger.warning("⚠️ No items — bulletin not built")
@@ -1649,17 +1659,20 @@ def _enqueue_report(report: dict):
     location_address = report.get('locationAddress') or report.get('location_address', '')
     location_name    = report.get('locationName') or report.get('location_name', '')
 
-    # UUID ho toh API se city/district fetch karo
-    if location_uuid and not str(location_uuid).isdigit():
+    logger.info(f"[LOC-DEBUG] report keys={list(report.keys())}")
+    logger.info(f"[LOC-DEBUG] locationId='{report.get('locationId')}' | location_id='{report.get('location_id')}' | resolved_uuid='{location_uuid}'")
+
+    # location_id (integer ya UUID) se API try karo
+    if location_uuid:
         loc_data = fetch_location_details(str(location_uuid))
         if loc_data:
-            city     = loc_data.get('city', '')
+            city     = loc_data.get('constituency') or loc_data.get('city', '')
             district = loc_data.get('district', '')
             state    = loc_data.get('state', '')
             if city:
                 location_name    = city
                 location_address = ', '.join(filter(None, [city, district, state]))
-                logger.info(f"Location resolved: {location_name} ({location_address})")
+                logger.info(f"[LOC-DEBUG] Resolved → name='{location_name}' | address='{location_address}'")
 
     logger.info(f"📋 [DEBUG] Full report payload keys: {list(report.keys())}")
     logger.info(f"📋 [DEBUG] name='{report.get('name')}' | email='{report.get('email')}' | sender_name='{name}'")
