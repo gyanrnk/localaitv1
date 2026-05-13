@@ -309,7 +309,8 @@ def _safe_rmtree(path: str, retries: int = 5, delay: float = 2.0):
 
 
 _LOCATION_CACHE_FILE = os.path.join(os.path.dirname(__file__), '.location_channel_cache.json')
-_CHANNELS = ["Karimnagar", "Khammam", "Kurnool", "Anatpur", "Kakinada", "Nalore", "Tirupati"]
+_CHANNELS = ["Karimnagar", "Khammam", "Kurnool", "Anatpur", "Kakinada", "Nalore", "Tirupati",
+             "Guntur", "Warangal", "Nalgonda"]
 
 def classify_location_to_channel(location_names: list) -> dict:
     """Use OpenAI to map raw location_name strings to one of 7 channels. Kurnool is default."""
@@ -337,7 +338,14 @@ def classify_location_to_channel(location_names: list) -> dict:
             temperature=0,
         )
         try:
-            mapping = json.loads(resp.choices[0].message.content)
+            raw = resp.choices[0].message.content.strip()
+            # strip markdown code fences if present
+            if raw.startswith('```'):
+                raw = raw.split('```')[1]
+                if raw.startswith('json'):
+                    raw = raw[4:]
+                raw = raw.strip()
+            mapping = json.loads(raw)
             cache.update(mapping)
             with open(_LOCATION_CACHE_FILE, 'w') as f:
                 json.dump(cache, f, indent=2)

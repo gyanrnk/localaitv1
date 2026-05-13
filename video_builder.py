@@ -49,7 +49,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
  
 from PIL import Image, ImageDraw, ImageFont
 from ticker_overlay import add_ticker_overlay
-from config import BASE_OUTPUT_DIR, ITEM_VIDEO_CACHE_DIR as _ITEM_VIDEO_CACHE_DIR
+from config import BASE_OUTPUT_DIR, ITEM_VIDEO_CACHE_DIR as _ITEM_VIDEO_CACHE_DIR, S3_INJECT_LOCAL_DIR
  
 def _save_to_item_cache(counter, src_path: str):
     """Copy a freshly-built item video to local cache and upload to S3 asynchronously."""
@@ -2605,7 +2605,6 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
  
             #     _rebuilt_news.append(_inj_path)
             #     injection_skip_ranges.append((_running_time_inj, _running_time_inj + _inj_dur))
-            from config import S3_INJECT_LOCAL_DIR
  
             if _inj_path and os.path.exists(_inj_path) and _inj_dur > 0:
                 _reenc_filename = os.path.basename(_inj_path).replace('.mp4', '_reenc.mp4')
