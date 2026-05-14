@@ -104,7 +104,19 @@ if not TELUGU_FONT or not os.path.exists(TELUGU_FONT):
 if not TELUGU_FONT or not os.path.exists(TELUGU_FONT):
     print("❌ No Telugu font found! Run: apt-get install fonts-noto")
     TELUGU_FONT = 'Arial'
- 
+
+_FONT_FACE_CSS = ""
+if TELUGU_FONT and os.path.exists(TELUGU_FONT):
+    _fp = TELUGU_FONT.replace('\\', '/')
+    _FONT_FACE_CSS = (
+        f"@font-face {{font-family:'Noto Sans Telugu';"
+        f"src:url('file://{_fp}');font-weight:normal;}}\n"
+        f"@font-face {{font-family:'Noto Sans Telugu';"
+        f"src:url('file://{_fp}');font-weight:600;}}\n"
+        f"@font-face {{font-family:'Noto Sans Telugu';"
+        f"src:url('file://{_fp}');font-weight:bold;}}"
+    )
+
 _pw_instance = None
 _pw_browser  = None
  
@@ -420,6 +432,7 @@ def _create_reporter_card_png(name: str, photo_path: str = None) -> Optional[str
         _card_bottom = -55 + TICKER_HEIGHT   # 140px from bottom
         html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
     <style>
+    {_FONT_FACE_CSS}
     * {{ margin:0; padding:0; box-sizing:border-box; }}
     html, body {{ width:1920px; height:1080px; background:rgba(0,0,0,0); }}
     .wrapper {{
@@ -532,6 +545,7 @@ def _create_location_card_png(display_text: str) -> Optional[str]:
         _loc_bottom = -55 + TICKER_HEIGHT   # 154px from bottom
         html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
+{_FONT_FACE_CSS}
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 html, body {{ width:1920px; height:1080px; background:rgba(0,0,0,0); }}
 .loc-wrapper {{
@@ -622,6 +636,7 @@ def _create_location_pill_png(display_text: str, pill_x: int, y_circle: int, cir
     try:
         html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
+{_FONT_FACE_CSS}
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 html, body {{ width:1920px; height:1080px; background:rgba(0,0,0,0); }}
 .wrapper {{
@@ -819,6 +834,7 @@ def _create_headline_overlay(headline_text: str, width: int, height: int,
         html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>
+{_FONT_FACE_CSS}
 * {{ margin:0; padding:0; }}
 html, body {{ width:{width}px; height:{height}px; background:rgba(0,0,0,0); }}
 .zone {{

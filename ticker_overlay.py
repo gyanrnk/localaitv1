@@ -214,6 +214,16 @@ def _build_headline_html(headlines: list, font_size: int,
                           est_w: int, repeats: int) -> str:
     r, g, b, _ = color
 
+    font_face = ""
+    if TELUGU_FONT and os.path.exists(TELUGU_FONT):
+        fp = TELUGU_FONT.replace('\\', '/')
+        font_face = (
+            f"@font-face {{font-family:'Noto Sans Telugu';"
+            f"src:url('file://{fp}');font-weight:normal;}}\n"
+            f"@font-face {{font-family:'Noto Sans Telugu';"
+            f"src:url('file://{fp}');font-weight:600;}}"
+        )
+
     if mic_b64:
         sep = (
             f'<img src="data:image/png;base64,{mic_b64}" '
@@ -228,6 +238,7 @@ def _build_headline_html(headlines: list, font_size: int,
 
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
+{font_face}
 * {{margin:0;padding:0;}}
 html,body {{width:{est_w}px;height:{band_h}px;background:rgba(0,0,0,0);}}
 .t {{
@@ -246,10 +257,22 @@ def _build_ad_html(ad_text: str, font_size: int,
                    color: tuple, band_h: int,
                    est_w: int, repeats: int) -> str:
     r, g, b, _ = color
+
+    font_face = ""
+    if TELUGU_FONT and os.path.exists(TELUGU_FONT):
+        fp = TELUGU_FONT.replace('\\', '/')
+        font_face = (
+            f"@font-face {{font-family:'Noto Sans Telugu';"
+            f"src:url('file://{fp}');font-weight:normal;}}\n"
+            f"@font-face {{font-family:'Noto Sans Telugu';"
+            f"src:url('file://{fp}');font-weight:600;}}"
+        )
+
     full_content = (ad_text + f'  {AD_SEP}  ') * repeats
 
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
+{font_face}
 * {{margin:0;padding:0;}}
 html,body {{width:{est_w}px;height:{band_h}px;background:rgba(0,0,0,0);}}
 .t {{
