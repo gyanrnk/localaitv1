@@ -749,7 +749,7 @@ def _run_planner():
     try:
         logger.info("🔨 Building bulletins (all locations)...")
         from bulletin_builder import build_all_location_bulletins
-        results = build_all_location_bulletins(5)
+        results = build_all_location_bulletins(10)
 
         if not results:
             logger.warning("⚠️ No items — bulletin not built")
