@@ -1308,7 +1308,7 @@ def cleanup_old_data_loop():
     from datetime import datetime, timezone, timedelta
 
     MAX_AGE_SEC    = 24 * 60 * 60   # 24 hours
-    CHECK_INTERVAL = 3600           # har 1hr mein check
+    CHECK_INTERVAL = 1800           # har 30min mein check
 
     logger.info("🧹 Cleanup loop started (24hr mode, checks every 1hr)")
 
@@ -1491,49 +1491,59 @@ def cleanup_old_data_loop():
 
         # ══════════════════════════════════════════════════════════════════════
         # STEP 6 — Bulletin directories (24hr+ purane)
+        # Structure: bulletins/<location>/bul_YYYYMMDD_HHMMSS/
+        #            bulletins/bul_YYYYMMDD_HHMMSS/  (flat, legacy)
         # ══════════════════════════════════════════════════════════════════════
-        if os.path.exists(BULLETINS_DIR):
-            for bname in os.listdir(BULLETINS_DIR):
-                bpath = os.path.join(BULLETINS_DIR, bname)
-                if not os.path.isdir(bpath):
-                    continue
+        def _cleanup_bulletin_folder(bpath: str, bname: str):
+            age_sec = None
+            clean = bname.replace('_tmp', '').replace('_old', '')
+            parts = clean.split('_')
+            # Try to parse date from last two parts (YYYYMMDD_HHMMSS)
+            if len(parts) >= 2:
+                try:
+                    dt_str    = parts[-2] + parts[-1]
+                    folder_dt = datetime.strptime(dt_str, '%Y%m%d%H%M%S')
+                    age_sec   = now - folder_dt.timestamp()
+                except Exception:
+                    pass
+            if age_sec is None:
+                age_sec = now - os.path.getmtime(bpath)
 
-                # Folder name se age nikalo (format: bul_gen_20260317_042409)
-                age_sec = None
-                parts = bname.replace('_tmp', '').replace('_old', '').split('_')
-                if len(parts) >= 4:
-                    try:
-                        dt_str    = parts[-2] + parts[-1]   # '20260317042409'
-                        folder_dt = datetime.strptime(dt_str, '%Y%m%d%H%M%S')
-                        age_sec   = now - folder_dt.timestamp()
-                    except Exception:
-                        pass
-
-                if age_sec is None:
-                    age_sec = now - os.path.getmtime(bpath)
-
-                if age_sec > MAX_AGE_SEC:
+            if bname.endswith('_tmp') or bname.endswith('_old'):
+                if age_sec > 3600:
                     try:
                         _shutil.rmtree(bpath)
-                        logger.info(f"🗑️ Deleted bulletin dir: {bname}")
+                        logger.info(f"🗑️ Deleted stale temp folder: {bname}")
                     except Exception as e:
-                        logger.warning(f"⚠️ Could not delete bulletin {bpath}: {e}")
+                        logger.warning(f"⚠️ Could not delete stale folder {bpath}: {e}")
+            elif age_sec > MAX_AGE_SEC:
+                try:
+                    _shutil.rmtree(bpath)
+                    logger.info(f"🗑️ Deleted bulletin dir: {bname}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not delete bulletin {bpath}: {e}")
 
-        # ══════════════════════════════════════════════════════════════════════
-        # STEP 7 — Stale _tmp / _old bulletin folders (1hr+)
-        # ══════════════════════════════════════════════════════════════════════
         if os.path.exists(BULLETINS_DIR):
-            for bname in os.listdir(BULLETINS_DIR):
-                bpath = os.path.join(BULLETINS_DIR, bname)
-                if not os.path.isdir(bpath):
+            for entry in os.listdir(BULLETINS_DIR):
+                epath = os.path.join(BULLETINS_DIR, entry)
+                if not os.path.isdir(epath):
                     continue
-                if bname.endswith('_tmp') or bname.endswith('_old'):
+                if entry.startswith('bul_'):
+                    # Flat structure: bulletins/bul_xxx/
+                    _cleanup_bulletin_folder(epath, entry)
+                else:
+                    # Location subfolder: bulletins/Kurnool/, bulletins/Warangal/ etc.
+                    for bname in os.listdir(epath):
+                        bpath = os.path.join(epath, bname)
+                        if os.path.isdir(bpath) and bname.startswith('bul_'):
+                            _cleanup_bulletin_folder(bpath, bname)
+                    # Remove empty location folder
                     try:
-                        if now - os.path.getmtime(bpath) > 3600:
-                            _shutil.rmtree(bpath)
-                            logger.info(f"🗑️ Deleted stale temp folder: {bname}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Could not delete stale folder {bname}: {e}")
+                        if not os.listdir(epath):
+                            os.rmdir(epath)
+                            logger.info(f"🗑️ Removed empty location folder: {entry}")
+                    except Exception:
+                        pass
 
         # ══════════════════════════════════════════════════════════════════════
         # STEP 8 — Reporter photos (24hr+)
