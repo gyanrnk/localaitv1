@@ -411,18 +411,10 @@ class GeminiHandler:
                 except: pass
 
 
-_GEMINI_LOCATIONS = {
-    'kurnool', 'కర్నూల్', 'kurnool tv', 'kurnooltv',
-    'guntur', 'గుంటూరు', 'guntur tv', 'gunturtv',
-    'warangal', 'వరంగల్', 'warangal tv', 'warangaltv',
-    'nalgonda', 'నల్గొండ', 'nalgonda tv', 'nalgondatv',
-}
-
-def get_llm_handler(location_name: str):
-    """Returns GeminiHandler for Gemini locations, OpenAIHandler for all others."""
-    if location_name and location_name.lower().split(',')[0].strip() in _GEMINI_LOCATIONS:
-        if GEMINI_API_KEY:
-            return GeminiHandler()
-        print("⚠️  GEMINI_API_KEY not set — falling back to OpenAI")
+def get_llm_handler(location_name: str = ''):
+    """Returns GeminiHandler for all locations."""
+    if GEMINI_API_KEY:
+        return GeminiHandler()
+    print("⚠️  GEMINI_API_KEY not set — falling back to OpenAI")
     return OpenAIHandler()
 

@@ -152,10 +152,9 @@ def has_human_voice(video_path: str, min_duration: float = 2.0) -> bool:
             print(f"❌ Audio extraction failed (code={result.returncode}): {result.stderr.decode()[-300:]}")
             return False
 
-        # Step 3: Transcribe using Whisper/Groq
-        from openai_handler import OpenAIHandler
-        groq = OpenAIHandler()
-        transcript_result = groq.transcribe_audio(audio_temp_path)
+        # Step 3: Transcribe using Gemini
+        from openai_handler import get_llm_handler
+        transcript_result = get_llm_handler().transcribe_audio(audio_temp_path)
 
         transcript = transcript_result.get('text', '')
         if not transcript or len(transcript.strip()) < 10:
