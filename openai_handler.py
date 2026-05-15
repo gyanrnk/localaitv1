@@ -318,6 +318,98 @@ class GeminiHandler:
             print(f"❌ Gemini headline generation error: {e}")
             return None
 
+    def generate_editorial_plan(self, transcript_text: str) -> str:
+        from config import EDITORIAL_PLANNER_PROMPT
+        system_prompt = (
+            EDITORIAL_PLANNER_PROMPT +
+            "\n\nCRITICAL LANGUAGE RULE: tts_intro and tts_analysis fields in your JSON "
+            "MUST be written entirely in Telugu script (తెలుగు లిపి). "
+            "Zero tolerance for English, Urdu, Hindi, or Arabic in those fields."
+        )
+        with self._semaphore:
+            time.sleep(1.0)
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": f"Transcript:\n{transcript_text}"},
+                ],
+                temperature=0.3,
+            )
+        return response.choices[0].message.content.strip()
+
+    def translate_to_telugu(self, text: str) -> str:
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{
+                    "role": "user",
+                    "content": f"Translate this place name to Telugu script only. Reply with ONLY the Telugu text, nothing else: {text}"
+                }],
+                max_tokens=20,
+                temperature=0,
+            )
+            return resp.choices[0].message.content.strip()
+        except:
+            return text
+
+    def transcribe_audio(self, audio_path: str) -> dict:
+        import os, subprocess, tempfile
+        import google.generativeai as genai
+
+        genai.configure(api_key=GEMINI_API_KEY)
+
+        # Convert to mp3 if needed
+        _send_path = audio_path
+        _tmp_mp3   = None
+        ext = os.path.splitext(audio_path)[1].lower()
+        if ext in ('.webm', '.ogg', '.m4a', '.opus'):
+            try:
+                _tmp_mp3 = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
+                _tmp_mp3.close()
+                r = subprocess.run(
+                    ['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1',
+                     '-b:a', '64k', _tmp_mp3.name],
+                    capture_output=True, timeout=60
+                )
+                if r.returncode == 0:
+                    _send_path = _tmp_mp3.name
+            except Exception as _ce:
+                print(f"⚠️ webm→mp3 convert failed: {_ce}, sending original")
+
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            audio_file = genai.upload_file(path=_send_path)
+            response = model.generate_content([
+                'Transcribe this audio verbatim in the original language. Return only the transcription text, nothing else.',
+                audio_file
+            ])
+            text = (response.text or '').strip()
+
+            try:
+                genai.delete_file(audio_file.name)
+            except Exception:
+                pass
+
+            # Estimate segments from words (Gemini doesn't provide timestamps)
+            segments = []
+            if text:
+                words, WPS, t = text.split(), 2.2, 0.0
+                for i in range(0, len(words), 8):
+                    chunk = words[i:i+8]
+                    dur = len(chunk) / WPS
+                    segments.append({'start': round(t, 2), 'end': round(t + dur, 2), 'text': ' '.join(chunk)})
+                    t += dur
+
+            return {'text': text, 'segments': segments}
+        except Exception as e:
+            print(f"❌ Gemini transcription error: {e}")
+            return {'text': '', 'segments': []}
+        finally:
+            if _tmp_mp3:
+                try: os.unlink(_tmp_mp3.name)
+                except: pass
+
 
 _GEMINI_LOCATIONS = {
     'kurnool', 'కర్నూల్', 'kurnool tv', 'kurnooltv',

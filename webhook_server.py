@@ -30,8 +30,6 @@ from flask import send_from_directory
 from werkzeug.utils import secure_filename
 import mimetypes
 from datetime import datetime, timedelta  # timedelta add karo agar missing hai
-from openai_handler import OpenAIHandler  # ya jo bhi instance hai
-
 init_db()
 
 
@@ -638,8 +636,8 @@ def _send_bulletin_to_api(bulletin_dir: str, video_url: str, manifest: dict):
     start_time = start_dt.strftime('%I:%M %p').lstrip('0')
     location_en = manifest.get('location_name') or (items[0].get('location_name', '') if items else '')
     location_en = location_en.split(',')[0].strip() or 'News'
-    _oai = OpenAIHandler()
-    location_te = _oai.translate_to_telugu(location_en) if location_en else 'వార్త'
+    from openai_handler import get_llm_handler
+    location_te = get_llm_handler(location_en).translate_to_telugu(location_en) if location_en else 'వార్త'
 
     title = f"{location_te} వార్త బులెటిన్స్ | 🕒 {start_time}"
 

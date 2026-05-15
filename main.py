@@ -603,7 +603,7 @@ class NewsBot:
         audio_transcripts = []   # sirf recorded audio (script ke liye)
         for apath in local_audios:
             print(f"🎙️ Transcribing audio: {apath}")
-            tr = self.groq.transcribe_audio(apath)
+            tr = get_llm_handler(location_name).transcribe_audio(apath)
             t = tr.get('text', '')
             if t:
                 audio_transcripts.append(t)
@@ -644,7 +644,7 @@ class NewsBot:
             print("🎯 Running cross-video clip selection...")
             try:
                 from editorial_planner import EditorialPlanner
-                planner = EditorialPlanner(self.groq)
+                planner = EditorialPlanner(get_llm_handler(location_name))
                 plan = planner.build_story_plan(all_segments, user_text=combined_text)
  
                 _intro    = plan.get('tts_intro', '')
@@ -1062,7 +1062,7 @@ class NewsBot:
             transcript = ''
             segments   = []
             if extracted_audio_path:
-                transcript_result = self.groq.transcribe_audio(extracted_audio_path)
+                transcript_result = get_llm_handler(location_address).transcribe_audio(extracted_audio_path)
                 transcript = transcript_result.get('text', '')
                 segments   = transcript_result.get('segments', [])
             else:
@@ -1075,7 +1075,7 @@ class NewsBot:
             if segments:
                 try:
                     from editorial_planner import EditorialPlanner
-                    planner = EditorialPlanner(self.groq)
+                    planner = EditorialPlanner(get_llm_handler(location_address))
                     plan    = planner.build_story_plan(segments, user_text=combined_text)
  
                     _intro    = plan.get('tts_intro', '')
