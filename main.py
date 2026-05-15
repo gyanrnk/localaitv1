@@ -22,7 +22,7 @@ from bulletin_builder import append_news_item
 import report_state_manager as _rsm
 from config import OUTPUT_AUDIO_DIR, REPORTER_PHOTO_DIR, ADDRESS_GIF_PATH, ensure_assets
 ensure_assets()  # download missing static assets from S3 on startup
-from openai_handler import OpenAIHandler, get_llm_handler
+from openai_handler import OpenAIHandler, GeminiHandler, get_llm_handler
 from clip_analyzer import get_structure_decision, should_use_clip_first
  
  
@@ -70,7 +70,7 @@ class NewsBot:
         self.gupshup       = GupshupHandler()
         self.file_manager  = FileManager()
         self.media_handler = MediaHandler()
-        self.groq          = OpenAIHandler()
+        self.groq          = GeminiHandler()
         self.telugu        = TeluguProcessor()
         self.message_queue = MessageQueue(text_wait_timeout=120)
         # NOTE: No shared self.tts — each item creates its own TTSHandler via
@@ -564,7 +564,7 @@ class NewsBot:
                 video_segment_map.append((vpath, time_offset, []))
                 continue
  
-            tr = self.groq.transcribe_audio(extracted)
+            tr = get_llm_handler(location_name).transcribe_audio(extracted)
             transcript_text = tr.get('text', '')
             segments = tr.get('segments', [])
             os.unlink(extracted)
@@ -1176,7 +1176,7 @@ class NewsBot:
         # ─── AUDIO ───────────────────────────────────────────────────────────
         elif media_type == 'audio':
             print("🎙️ Audio received — transcribing...")
-            transcript_result = self.groq.transcribe_audio(media_info['input_path'])
+            transcript_result = get_llm_handler(location_address).transcribe_audio(media_info['input_path'])
             transcript = transcript_result.get('text', '')
             if transcript:
                 combined = self._combine_text_and_transcript(text, transcript)
@@ -1191,7 +1191,7 @@ class NewsBot:
         elif media_type == 'image':
             if extra_audio_path and os.path.exists(extra_audio_path):
                 print("🖼️🎙️ Image + Audio received — transcribing audio...")
-                transcript_result = self.groq.transcribe_audio(extra_audio_path)
+                transcript_result = get_llm_handler(location_address).transcribe_audio(extra_audio_path)
                 transcript = transcript_result.get('text', '')
                 if transcript:
                     combined = self._combine_text_and_transcript(text, transcript)

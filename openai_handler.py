@@ -355,9 +355,7 @@ class GeminiHandler:
 
     def transcribe_audio(self, audio_path: str) -> dict:
         import os, subprocess, tempfile
-        import google.generativeai as genai
-
-        genai.configure(api_key=GEMINI_API_KEY)
+        from google import genai as google_genai
 
         # Convert to mp3 if needed
         _send_path = audio_path
@@ -378,16 +376,19 @@ class GeminiHandler:
                 print(f"⚠️ webm→mp3 convert failed: {_ce}, sending original")
 
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            audio_file = genai.upload_file(path=_send_path)
-            response = model.generate_content([
-                'Transcribe this audio verbatim in the original language. Return only the transcription text, nothing else.',
-                audio_file
-            ])
+            client = google_genai.Client(api_key=GEMINI_API_KEY)
+            audio_file = client.files.upload(file=_send_path)
+            response = client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=[
+                    'Transcribe this audio verbatim in the original language. Return only the transcription text, nothing else.',
+                    audio_file,
+                ],
+            )
             text = (response.text or '').strip()
 
             try:
-                genai.delete_file(audio_file.name)
+                client.files.delete(name=audio_file.name)
             except Exception:
                 pass
 

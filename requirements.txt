@@ -11,7 +11,7 @@ psycopg2-binary>=2.9.0
 
 # AI / LLM
 openai>=1.30.0
-google-generativeai>=0.8.0
+google-genai>=1.0.0
 
 # Google Cloud TTS (Chirp3 HD — Telugu dual-voice)
 google-cloud-texttospeech>=2.16.0
