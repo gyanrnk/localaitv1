@@ -686,27 +686,31 @@ def _send_bulletin_to_api(bulletin_dir: str, video_url: str, manifest: dict):
         logger.error(f"❌ Bulletin API error: {e}")
 
 
-def _concat_item_segments(rank: int, segments_dir: str, out_path: str) -> bool:
+def _concat_item_segments(rank: int, segments_dir: str, out_path: str, segments: list = None) -> bool:
     """Collect all segments for a given item rank and concat into one video."""
     import glob, shutil
 
-    rank_str = str(rank).zfill(2)
+    if segments:
+        # Use exact paths from marker — most reliable
+        matched = [s for s in segments if s and os.path.exists(s)]
+    else:
+        rank_str = str(rank).zfill(2)
 
-    # Collect in filename-sorted order (NNN_ prefix ensures correct sequence)
-    patterns = [
-        f"*_intro_{rank_str}.mp4",
-        f"*_clip_{rank_str}.mp4",
-        f"*_analysis_{rank_str}.mp4",
-        f"*_news_{rank_str}.mp4",        # image / audio items (single segment)
-    ]
+        # Collect in filename-sorted order (NNN_ prefix ensures correct sequence)
+        patterns = [
+            f"*_intro_{rank_str}.mp4",
+            f"*_clip_{rank_str}.mp4",
+            f"*_analysis_{rank_str}.mp4",
+            f"*_news_{rank_str}.mp4",        # image / audio items (single segment)
+        ]
 
-    matched = []
-    for pat in patterns:
-        found = sorted(glob.glob(os.path.join(segments_dir, pat)))
-        matched.extend(found)
+        matched = []
+        for pat in patterns:
+            found = sorted(glob.glob(os.path.join(segments_dir, pat)))
+            matched.extend(found)
 
-    # Re-sort by the numeric NNN prefix so order is always correct
-    matched = sorted(set(matched), key=lambda p: os.path.basename(p))
+        # Re-sort by the numeric NNN prefix so order is always correct
+        matched = sorted(set(matched), key=lambda p: os.path.basename(p))
 
     if not matched:
         logger.warning(f"  ⚠️ No segments found for rank={rank}")
@@ -976,7 +980,13 @@ def _run_planner():
                         # ── Fresh item: concat segments → incident fire ────────
                         t_concat = time()
                         logger.info(f"  🔧 [rank={rank}] concat starting...")
-                        ok = _concat_item_segments(rank, segments_dir, item_out)
+                        # Use exact segment paths from marker — more reliable than glob
+                        _marker_segs = [s for s in marker.get('segments', []) if s and os.path.exists(s)]
+                        logger.info(f"  🔧 [rank={rank}] marker segments={len(_marker_segs)}: {[os.path.basename(s) for s in _marker_segs]}")
+                        if _marker_segs:
+                            ok = _concat_item_segments(rank, segments_dir, item_out, segments=_marker_segs)
+                        else:
+                            ok = _concat_item_segments(rank, segments_dir, item_out)
                         concat_elapsed = round(time() - t_concat, 2)
 
                         if ok:
