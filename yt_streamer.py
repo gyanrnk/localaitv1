@@ -99,6 +99,17 @@ def _get_intro_path(channel_name: str) -> Path | None:
     default = _SCRIPT_DIR / 'assets' / 'intro4.mp4'
     return default if default.exists() else None
 
+
+def _get_notebooklm_path(channel_name: str) -> Path | None:
+    """Return channel-specific NotebookLM video, falling back to notebooklm.mp4.
+    Returns None if neither exists — caller skips it and uses intro-only loop."""
+    key = channel_name.lower().replace(' ', '_').replace('-', '_')
+    specific = _SCRIPT_DIR / 'assets' / f'notebooklm_{key}.mp4'
+    if specific.exists():
+        return specific
+    default = _SCRIPT_DIR / 'assets' / 'notebooklm.mp4'
+    return default if default.exists() else None
+
 _train_rotation_idx = 0
 
 # ── Fixed daily broadcast schedule (IST) ─────────────────────────────────────
@@ -410,12 +421,13 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
         debug(f"[{label}] No bulletins — skipping concat build")
         return concat_path
 
-    # ── Single-file loop mode: intro or filler — no mixing, just repeat ───────
-    if len(bulletins) == 1:
-        single = bulletins[0]
-        line   = f"file '{str(single)}'"
-        concat_path.write_text("\n".join([line] * 500) + "\n", encoding="utf-8")
-        debug(f"[{label}] {concat_path.name}: loop mode — {single.name} x500")
+    # ── Filler loop mode: intro/notebooklm/filler assets — no bulletin mixing ──
+    # Real bulletins always have 'bul_' in their filename; assets never do.
+    if not any('bul_' in b.name for b in bulletins):
+        lines = [f"file '{str(b)}'" for b in bulletins]
+        reps  = max(1, 500 // len(bulletins))
+        concat_path.write_text("\n".join(lines * reps) + "\n", encoding="utf-8")
+        debug(f"[{label}] {concat_path.name}: filler loop — {[b.name for b in bulletins]} ×{reps}")
         return concat_path
 
     vege_path   = fetch_latest_vege()
@@ -611,11 +623,14 @@ def _launch_streams(inject_type=None, inject_payload=None):
                     seen.add(str(f)); merged.append(f)
             if merged:
                 return merged
-        # No content at all — play this channel's intro in a loop
+        # No content at all — play intro + notebooklm (if available) in a loop
         intro = _get_intro_path(channel_name)
-        if intro:
-            debug(f"[{channel_name}] No bulletins — intro loop: {intro.name}")
-            return [intro]
+        nlm   = _get_notebooklm_path(channel_name)
+        filler = [f for f in [intro, nlm] if f is not None]
+        if filler:
+            names = [f.name for f in filler]
+            debug(f"[{channel_name}] No bulletins — filler loop: {names}")
+            return filler
         if FILLER_FILE.exists():
             debug(f"[{channel_name}] No intro found — filler loop")
             return [FILLER_FILE]
