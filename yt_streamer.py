@@ -34,7 +34,9 @@ INTRO_SEC = 20
 if platform.system() == "Windows":
     _BASE = os.getenv("WATCH_DIR_BASE", r"C:\\Users\\Gyanaranjan kabi\\Desktop\\temp_copy\\outputs\\bulletins")
 else:
-    _BASE = os.getenv("WATCH_DIR_BASE", "/root/localaitv1/outputs/bulletins")
+    _BASE = os.getenv("WATCH_DIR_BASE", "/app/outputs/bulletins")
+    if not os.path.isdir(_BASE):
+        _BASE = os.getenv("WATCH_DIR_BASE", "/root/localaitv1/localaitv1/outputs/bulletins")
 
 def _wdir(name):
     return os.getenv(f"WATCH_DIR_{name.upper()}", f"{_BASE}/{name}")
