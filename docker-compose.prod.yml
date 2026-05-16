@@ -12,6 +12,7 @@ services:
       - "8001:8001"
     environment:
       - PORT=8001
+      - WATCH_DIR_BASE=/app/outputs/bulletins
       # Use external CloudSQL (your current setup)
       - DATABASE_URL=${DATABASE_URL}
       - DB_TYPE=postgres
@@ -79,6 +80,7 @@ services:
       - app
     environment:
       - PORT=8001
+      - WATCH_DIR_BASE=/app/outputs/bulletins
       - DATABASE_URL=${DATABASE_URL}
       - DB_TYPE=postgres
       - USE_S3=true
