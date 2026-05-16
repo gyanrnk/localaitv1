@@ -86,6 +86,9 @@ MARRIAGE_PREFIX = "marriages/outputs/"
 INJECT_CACHE_DIR = Path("s3_inject_cache")
 INJECT_CACHE_DIR.mkdir(exist_ok=True)
 
+NOTEBOOKLM_CACHE_DIR = Path("outputs/notebooklm_cache")
+NOTEBOOKLM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
 FILLER_FILE = Path(os.getenv("FILLER_FILE", "assets/filler.mp4"))
 
 _SCRIPT_DIR = Path(__file__).parent
@@ -102,9 +105,9 @@ def _get_intro_path(channel_name: str) -> Path | None:
 
 def _normalize_for_stream(src: Path) -> Path | None:
     """Return a stream-ready normalized copy of src (25fps, 1920x1080, aac 44100).
-    Cached as <stem>_norm.mp4 alongside original — only runs once per file.
+    Cached in outputs/notebooklm_cache/ — only runs once per file.
     Returns None if normalization fails. Does NOT affect bulletins/ads/programs."""
-    norm = src.parent / (src.stem + "_norm.mp4")
+    norm = NOTEBOOKLM_CACHE_DIR / (src.stem + "_norm.mp4")
     if norm.exists() and norm.stat().st_size > 100_000:
         return norm
     debug(f"Normalizing {src.name} → {norm.name} ...")
