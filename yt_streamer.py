@@ -100,15 +100,34 @@ def _get_intro_path(channel_name: str) -> Path | None:
     return default if default.exists() else None
 
 
+def _has_video_stream(path: Path) -> bool:
+    """Check if a video file has at least one video stream."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v",
+             "-show_entries", "stream=codec_type",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=10
+        )
+        return r.returncode == 0 and "video" in r.stdout
+    except Exception:
+        return False
+
+
 def _get_notebooklm_path(channel_name: str) -> Path | None:
     """Return channel-specific NotebookLM video, falling back to notebooklm.mp4.
-    Returns None if neither exists — caller skips it and uses intro-only loop."""
+    Returns None if file doesn't exist or has no video stream (e.g. audio-only export)."""
     key = channel_name.lower().replace(' ', '_').replace('-', '_')
-    specific = _SCRIPT_DIR / 'assets' / f'notebooklm_{key}.mp4'
-    if specific.exists():
-        return specific
-    default = _SCRIPT_DIR / 'assets' / 'notebooklm.mp4'
-    return default if default.exists() else None
+    for candidate in [
+        _SCRIPT_DIR / 'assets' / f'notebooklm_{key}.mp4',
+        _SCRIPT_DIR / 'assets' / 'notebooklm.mp4',
+    ]:
+        if candidate.exists():
+            if _has_video_stream(candidate):
+                return candidate
+            debug(f"[{channel_name}] Skipping {candidate.name} — no video stream (audio-only?)")
+            return None
+    return None
 
 _train_rotation_idx = 0
 
@@ -533,11 +552,13 @@ def start_ffmpeg_concat(stream_key, label, concat_path, force_encode=False):
                f"{RTMPS_URL}/{stream_key}"]
     elif force_encode:
         # Filler mode (intro/notebooklm): normalize fps + resolution, no overlay filter
-        cmd = ["ffmpeg","-re","-f","concat","-safe","0","-i",str(concat_path),
+        # -fflags +genpts fixes PTS discontinuity when concat switches between files
+        cmd = ["ffmpeg","-re","-fflags","+genpts",
+               "-f","concat","-safe","0","-i",str(concat_path),
                "-c:v","libx264","-preset","veryfast","-profile:v","high","-level","4.0",
                "-pix_fmt","yuv420p","-b:v","4500k","-maxrate","4500k","-bufsize","9000k",
-               "-r","25","-g","50","-keyint_min","50","-sc_threshold","0",
-               "-vf","scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1",
+               "-g","50","-keyint_min","50","-sc_threshold","0",
+               "-vf","scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25",
                "-c:a","aac","-ar","44100","-ac","2","-f","flv",
                "-reconnect","1","-reconnect_streamed","1","-reconnect_delay_max","30",
                f"{RTMPS_URL}/{stream_key}"]
