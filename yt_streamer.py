@@ -107,18 +107,19 @@ def _normalize_for_stream(src: Path) -> Path | None:
     """Return a stream-ready normalized copy of src (25fps, 1920x1080, aac 44100).
     Cached in outputs/notebooklm_cache/ — only runs once per file.
     Returns None if normalization fails. Does NOT affect bulletins/ads/programs."""
-    norm = NOTEBOOKLM_CACHE_DIR / (src.stem + "_norm.mp4")
+    norm = NOTEBOOKLM_CACHE_DIR.resolve() / (src.stem + "_norm.mp4")
     if norm.exists() and norm.stat().st_size > 100_000:
         return norm
     debug(f"Normalizing {src.name} → {norm.name} ...")
     r = subprocess.run([
         "ffmpeg", "-y", "-i", str(src),
-        "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
-        "-pix_fmt", "yuv420p", "-b:v", "4500k", "-maxrate", "4500k", "-bufsize", "9000k",
-        "-r", "25", "-g", "50", "-keyint_min", "50", "-sc_threshold", "0",
-        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,"
-               "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1",
-        "-c:a", "aac", "-ar", "44100", "-ac", "2",
+        "-c:v", "libx264", "-preset", "ultrafast", "-profile:v", "baseline", "-level", "4.0",
+        "-pix_fmt", "yuv420p", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+        "-r", "25", "-g", "50", "-keyint_min", "50", "-sc_threshold", "0", "-bf", "0",
+        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,"
+               "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
+        "-movflags", "+faststart",
         str(norm)
     ], capture_output=True)
     if r.returncode == 0 and norm.exists() and norm.stat().st_size > 100_000:
@@ -137,6 +138,69 @@ def _get_notebooklm_path(channel_name: str) -> Path | None:
     ]:
         if candidate.exists():
             return _normalize_for_stream(candidate)
+    return None
+
+
+def _build_combined_filler(channel_name: str) -> Path | None:
+    """Pre-encode intro + notebooklm into one seamless file via filter_complex concat.
+    Stored in NOTEBOOKLM_CACHE_DIR. Returns None if notebooklm doesn't exist for this channel.
+    Cache is invalidated when either source file is newer than the combined output."""
+    key     = channel_name.lower().replace(' ', '_').replace('-', '_')
+    nlm_src = next(
+        (c for c in [
+            _SCRIPT_DIR / 'assets' / f'notebooklm_{key}.mp4',
+            _SCRIPT_DIR / 'assets' / 'notebooklm.mp4',
+        ] if c.exists()),
+        None
+    )
+    if nlm_src is None:
+        return None
+
+    intro = _get_intro_path(channel_name)
+    out   = NOTEBOOKLM_CACHE_DIR.resolve() / f"combined_{key}.mp4"
+
+    # Cache hit: combined file is newer than both sources
+    if out.exists() and out.stat().st_size > 100_000:
+        src_mtime = max(
+            intro.stat().st_mtime if intro else 0.0,
+            nlm_src.stat().st_mtime
+        )
+        if src_mtime <= out.stat().st_mtime:
+            return out
+        out.unlink()
+
+    if intro is None:
+        debug(f"[{channel_name}] No intro — normalizing notebooklm only")
+        return _normalize_for_stream(nlm_src)
+
+    debug(f"[{channel_name}] Building combined filler: {intro.name} + {nlm_src.name}")
+    vf_segment = (
+        "scale=1280:720:force_original_aspect_ratio=decrease,"
+        "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25,format=yuv420p"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(intro),
+        "-i", str(nlm_src),
+        "-filter_complex",
+        f"[0:v]{vf_segment}[v0];"
+        "[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a0];"
+        f"[1:v]{vf_segment}[v1];"
+        "[1:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a1];"
+        "[v0][a0][v1][a1]concat=n=2:v=1:a=1[vout][aout]",
+        "-map", "[vout]", "-map", "[aout]",
+        "-c:v", "libx264", "-preset", "ultrafast", "-profile:v", "baseline", "-level", "4.0",
+        "-pix_fmt", "yuv420p", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+        "-g", "50", "-keyint_min", "50", "-sc_threshold", "0", "-bf", "0",
+        "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(out)
+    ]
+    r = subprocess.run(cmd, capture_output=True, timeout=600)
+    if r.returncode == 0 and out.exists() and out.stat().st_size > 100_000:
+        debug(f"[{channel_name}] Combined filler ready: {out.name} ({out.stat().st_size // 1024} KB)")
+        return out
+    debug(f"[{channel_name}] Combined filler failed: {r.stderr.decode()[-300:]}")
     return None
 
 _train_rotation_idx = 0
@@ -561,15 +625,15 @@ def start_ffmpeg_concat(stream_key, label, concat_path, force_encode=False):
                "-reconnect","1","-reconnect_streamed","1","-reconnect_delay_max","30",
                f"{RTMPS_URL}/{stream_key}"]
     elif force_encode:
-        # Filler mode (intro/notebooklm): normalize fps + resolution, no overlay filter
-        # -fflags +genpts fixes PTS discontinuity when concat switches between files
+        # Filler mode (intro/notebooklm): ultrafast preset to keep CPU load low
+        # across multiple simultaneous filler channels on the same VPS
         cmd = ["ffmpeg","-re","-fflags","+genpts",
                "-f","concat","-safe","0","-i",str(concat_path),
-               "-c:v","libx264","-preset","veryfast","-profile:v","high","-level","4.0",
-               "-pix_fmt","yuv420p","-b:v","4500k","-maxrate","4500k","-bufsize","9000k",
-               "-g","50","-keyint_min","50","-sc_threshold","0",
-               "-vf","scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25",
-               "-c:a","aac","-ar","44100","-ac","2","-f","flv",
+               "-c:v","libx264","-preset","ultrafast","-profile:v","baseline","-level","4.0",
+               "-pix_fmt","yuv420p","-b:v","2500k","-maxrate","2500k","-bufsize","5000k",
+               "-r","25","-g","50","-keyint_min","50","-sc_threshold","0",
+               "-vf","scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25",
+               "-c:a","aac","-ar","44100","-ac","2","-b:a","128k","-f","flv",
                "-reconnect","1","-reconnect_streamed","1","-reconnect_delay_max","30",
                f"{RTMPS_URL}/{stream_key}"]
     else:
@@ -665,14 +729,16 @@ def _launch_streams(inject_type=None, inject_payload=None):
                     seen.add(str(f)); merged.append(f)
             if merged:
                 return merged
-        # No content at all — play intro + notebooklm (if available) in a loop
+        # No content at all — play pre-encoded combined filler (intro+notebooklm) in a loop.
+        # Combined file is a single seamless MP4, so no concat-switching issues.
+        combined = _build_combined_filler(channel_name)
+        if combined:
+            debug(f"[{channel_name}] No bulletins — combined filler: {combined.name}")
+            return [combined]
         intro = _get_intro_path(channel_name)
-        nlm   = _get_notebooklm_path(channel_name)
-        filler = [f for f in [intro, nlm] if f is not None]
-        if filler:
-            names = [f.name for f in filler]
-            debug(f"[{channel_name}] No bulletins — filler loop: {names}")
-            return filler
+        if intro:
+            debug(f"[{channel_name}] No bulletins — intro-only loop: {intro.name}")
+            return [intro]
         if FILLER_FILE.exists():
             debug(f"[{channel_name}] No intro found — filler loop")
             return [FILLER_FILE]
@@ -689,8 +755,8 @@ def _launch_streams(inject_type=None, inject_payload=None):
         inj_t = inject_type    if i == 0 else None
         inj_p = inject_payload if i == 0 else None
         build_concat_list(bulletins, ch["concat"], ch["label"], inj_t, inj_p)
-        is_filler = bool(bulletins) and not any('bul_' in b.name for b in bulletins)
-        p = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"], force_encode=is_filler) \
+        # Combined filler is pre-encoded (720p/25fps/baseline/no-B-frames) — copy mode is safe.
+        p = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"]) \
             if (bulletins and ch["stream_key"]) else None
         if p:
             monitor_ffmpeg(p, ch["label"])
