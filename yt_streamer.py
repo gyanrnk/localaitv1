@@ -100,33 +100,40 @@ def _get_intro_path(channel_name: str) -> Path | None:
     return default if default.exists() else None
 
 
-def _has_video_stream(path: Path) -> bool:
-    """Check if a video file has at least one video stream."""
-    try:
-        r = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v",
-             "-show_entries", "stream=codec_type",
-             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-            capture_output=True, text=True, timeout=10
-        )
-        return r.returncode == 0 and "video" in r.stdout
-    except Exception:
-        return False
+def _normalize_for_stream(src: Path) -> Path | None:
+    """Return a stream-ready normalized copy of src (25fps, 1920x1080, aac 44100).
+    Cached as <stem>_norm.mp4 alongside original — only runs once per file.
+    Returns None if normalization fails. Does NOT affect bulletins/ads/programs."""
+    norm = src.parent / (src.stem + "_norm.mp4")
+    if norm.exists() and norm.stat().st_size > 100_000:
+        return norm
+    debug(f"Normalizing {src.name} → {norm.name} ...")
+    r = subprocess.run([
+        "ffmpeg", "-y", "-i", str(src),
+        "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
+        "-pix_fmt", "yuv420p", "-b:v", "4500k", "-maxrate", "4500k", "-bufsize", "9000k",
+        "-r", "25", "-g", "50", "-keyint_min", "50", "-sc_threshold", "0",
+        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,"
+               "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-c:a", "aac", "-ar", "44100", "-ac", "2",
+        str(norm)
+    ], capture_output=True)
+    if r.returncode == 0 and norm.exists() and norm.stat().st_size > 100_000:
+        debug(f"Normalized: {norm.name}")
+        return norm
+    debug(f"Normalization failed for {src.name}: {r.stderr.decode()[-200:]}")
+    return None
 
 
 def _get_notebooklm_path(channel_name: str) -> Path | None:
-    """Return channel-specific NotebookLM video, falling back to notebooklm.mp4.
-    Returns None if file doesn't exist or has no video stream (e.g. audio-only export)."""
+    """Return a stream-normalized NotebookLM video for the channel, or None."""
     key = channel_name.lower().replace(' ', '_').replace('-', '_')
     for candidate in [
         _SCRIPT_DIR / 'assets' / f'notebooklm_{key}.mp4',
         _SCRIPT_DIR / 'assets' / 'notebooklm.mp4',
     ]:
         if candidate.exists():
-            if _has_video_stream(candidate):
-                return candidate
-            debug(f"[{channel_name}] Skipping {candidate.name} — no video stream (audio-only?)")
-            return None
+            return _normalize_for_stream(candidate)
     return None
 
 _train_rotation_idx = 0
