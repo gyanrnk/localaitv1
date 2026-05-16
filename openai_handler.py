@@ -379,7 +379,7 @@ class GeminiHandler:
             client = google_genai.Client(api_key=GEMINI_API_KEY)
             audio_file = client.files.upload(file=_send_path)
             response = client.models.generate_content(
-                model='gemini-2.5-flash-preview-05-20',
+                model='gemini-2.5-flash',
                 contents=[
                     'Transcribe this audio verbatim in the original language. Return only the transcription text, nothing else.',
                     audio_file,
