@@ -525,13 +525,24 @@ def prepare_overlay():
 STREAM_MODE = os.getenv("STREAM_MODE", "copy").lower()
 
 
-def start_ffmpeg_concat(stream_key, label, concat_path):
-    if STREAM_MODE == "copy":
+def start_ffmpeg_concat(stream_key, label, concat_path, force_encode=False):
+    if STREAM_MODE == "copy" and not force_encode:
         cmd = ["ffmpeg","-re","-f","concat","-safe","0","-i",str(concat_path),
                "-c","copy","-f","flv",
                "-reconnect","1","-reconnect_streamed","1","-reconnect_delay_max","30",
                f"{RTMPS_URL}/{stream_key}"]
+    elif force_encode:
+        # Filler mode (intro/notebooklm): normalize fps + resolution, no overlay filter
+        cmd = ["ffmpeg","-re","-f","concat","-safe","0","-i",str(concat_path),
+               "-c:v","libx264","-preset","veryfast","-profile:v","high","-level","4.0",
+               "-pix_fmt","yuv420p","-b:v","4500k","-maxrate","4500k","-bufsize","9000k",
+               "-r","25","-g","50","-keyint_min","50","-sc_threshold","0",
+               "-vf","scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1",
+               "-c:a","aac","-ar","44100","-ac","2","-f","flv",
+               "-reconnect","1","-reconnect_streamed","1","-reconnect_delay_max","30",
+               f"{RTMPS_URL}/{stream_key}"]
     else:
+        # Full encode mode with viewer overlay
         cmd = ["ffmpeg","-re","-f","concat","-safe","0","-i",str(concat_path),
                "-filter_script:v","yt_overlay.filter",
                "-c:v","libx264","-preset","veryfast","-profile:v","high","-level","4.0",
@@ -647,7 +658,8 @@ def _launch_streams(inject_type=None, inject_payload=None):
         inj_t = inject_type    if i == 0 else None
         inj_p = inject_payload if i == 0 else None
         build_concat_list(bulletins, ch["concat"], ch["label"], inj_t, inj_p)
-        p = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"]) \
+        is_filler = bool(bulletins) and not any('bul_' in b.name for b in bulletins)
+        p = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"], force_encode=is_filler) \
             if (bulletins and ch["stream_key"]) else None
         if p:
             monitor_ffmpeg(p, ch["label"])
