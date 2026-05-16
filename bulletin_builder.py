@@ -1562,9 +1562,9 @@ _CHANNELS = ["Karimnagar", "Khammam", "Kurnool", "Anatpur", "Kakinada", "Nalore"
              "Guntur", "Warangal", "Nalgonda"]
 
 def classify_location_to_channel(location_names: list) -> dict:
-    """Use Gemini to map raw location_name strings to one of the known channels. Kurnool is default."""
+    """Use Gemini (OpenAI-compat client) to map location names to channels. Kurnool is default."""
     import json
-    import google.generativeai as genai
+    from openai import OpenAI
     from config import GEMINI_API_KEY, GEMINI_MODEL
 
     cache = {}
@@ -1574,8 +1574,11 @@ def classify_location_to_channel(location_names: list) -> dict:
 
     uncached = [n for n in location_names if n not in cache]
     if uncached:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel(GEMINI_MODEL)
+        print(f"[GEMINI] 📍 classify_location_to_channel | model={GEMINI_MODEL} | uncached={uncached}")
+        client = OpenAI(
+            api_key=GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        )
         prompt = (
             f"Map each location name to exactly one of these channels: {_CHANNELS}. "
             f"If unsure or no match, assign 'Kurnool'. "
@@ -1583,11 +1586,15 @@ def classify_location_to_channel(location_names: list) -> dict:
             f"Locations: {uncached}"
         )
         try:
-            resp = model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(temperature=0),
+            resp = client.chat.completions.create(
+                model=GEMINI_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
             )
-            raw = resp.text.strip()
+            raw = resp.choices[0].message.content
+            if not raw:
+                raise ValueError("Empty response from Gemini")
+            raw = raw.strip()
             if raw.startswith('```'):
                 raw = raw.split('```')[1]
                 if raw.startswith('json'):
