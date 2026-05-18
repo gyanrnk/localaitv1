@@ -732,7 +732,10 @@ class GeminiHandler:
             return None
 
     def generate_headline(self, script: str) -> Optional[str]:
-        print(f"[GEMINI] 🗞️  generate_headline | model={self.headline_model}")
+        print(f"[GEMINI] 📰  generate_headline | model={self.headline_model}")
+        # send only first ~100 words to keep prompt tight
+        words = script.split()
+        short_script = " ".join(words[:100]) if len(words) > 100 else script
         try:
             with self._semaphore:
                 time.sleep(1.0)
@@ -741,10 +744,10 @@ class GeminiHandler:
                     messages=[
                         {"role": "system", "content": TELUGU_HEADLINE_PROMPT +
                          "\n\nCRITICAL: Headline must be maximum 5-7 words only. Short and punchy. No long sentences."},
-                        {"role": "user",   "content": f"News Script:\n\n{script}"},
+                        {"role": "user",   "content": f"News Script:\n\n{short_script}"},
                     ],
                     temperature=0.3,
-                    max_tokens=50,
+                    max_tokens=150,
                 )
             raw = response.choices[0].message.content
             if not raw:

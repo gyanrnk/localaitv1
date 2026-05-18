@@ -763,7 +763,7 @@ class NewsBot:
             analysis_script = self.telugu.remove_media_references(analysis_script)  # ← add
  
         # ── Headline ──────────────────────────────────────────────────────────
-        headline = get_llm_handler(location_name).generate_headline(script) or "వార్త"
+        headline = get_llm_handler(location_name).generate_headline(script) or " ".join(script.split()[:5])
  
         # ── Stage 3 checkpoint: script + headline done ────────────────────────
         if report_id:
@@ -1242,7 +1242,7 @@ class NewsBot:
         headline = get_llm_handler(location_address).generate_headline(script)
         if not headline:
             print("⚠️ Headline generation failed — using default")
-            headline = "వార్త"
+            headline = " ".join(script.split()[:5])
  
         # ─── TTS Generation ──────────────────────────────────────────────────
         audio_temp_path          = None

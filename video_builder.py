@@ -516,9 +516,14 @@ def _location_display_text(location_name: str) -> str:
         if any('\u0C00' <= ch <= '\u0C7F' for ch in location_name):
             result = location_name
         else:
-            from openai_handler import get_llm_handler
-            telugu = get_llm_handler(location_name).translate_to_telugu(location_name).strip()
-            result = telugu if telugu and telugu != location_name else location_name
+            from location_resolver import get_location_te
+            mapped = get_location_te(location_name)
+            if mapped != location_name:
+                result = mapped
+            else:
+                from openai_handler import get_llm_handler
+                telugu = get_llm_handler(location_name).translate_to_telugu(location_name).strip()
+                result = telugu if telugu and telugu != location_name else location_name
     except Exception as e:
         print(f"  ⚠️ Location translation failed: {e}")
         result = location_name
