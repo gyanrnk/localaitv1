@@ -565,7 +565,7 @@ class OpenAIHandler:
                         {"role": "user",   "content": f"News Script:\n\n{script}"}
                     ],
                     temperature=0.3,
-                    max_tokens=50,
+                    max_tokens=150,
                 )
             return response.choices[0].message.content.strip()
         except Exception as e:
