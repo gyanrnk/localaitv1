@@ -4,7 +4,7 @@ Run on VPS inside container:
     docker exec localaitv_app python fix_headlines_db.py
 
 Finds news_items where headline is short/bad (<= 4 chars or <= 1 word),
-regenerates from script using Gemini, updates DB.
+regenerates from intro_script column in DB, updates headline.
 """
 import db
 from openai_handler import get_llm_handler
@@ -20,7 +20,7 @@ def is_bad_headline(h):
     return False
 
 rows = db.fetchall("""
-    SELECT counter, headline, script_filename
+    SELECT counter, headline, intro_script, original_text
     FROM news_items
     WHERE timestamp::timestamptz >= NOW() - INTERVAL '48 hours'
     ORDER BY counter DESC
@@ -30,24 +30,18 @@ bad = [r for r in rows if is_bad_headline(r.get('headline', ''))]
 print(f"Total items (48h): {len(rows)} | Bad headlines: {len(bad)}")
 
 fixed = 0
+llm = get_llm_handler()
 for r in bad:
     counter = r['counter']
     old_hl  = r.get('headline', '')
 
-    # Try to load script from file
-    script_file = r.get('script_filename', '')
-    script_text = ''
-    if script_file and __import__('os').path.exists(script_file):
-        try:
-            script_text = open(script_file, encoding='utf-8').read().strip()
-        except Exception:
-            pass
+    script_text = (r.get('intro_script') or r.get('original_text') or '').strip()
 
     if not script_text:
-        print(f"  [{counter}] No script file — skipping (headline='{old_hl}')")
+        print(f"  [{counter}] No script in DB — skipping (headline='{old_hl}')")
         continue
 
-    new_hl = get_llm_handler().generate_headline(script_text)
+    new_hl = llm.generate_headline(script_text)
     if not new_hl or is_bad_headline(new_hl):
         print(f"  [{counter}] Regeneration failed — skipping")
         continue
