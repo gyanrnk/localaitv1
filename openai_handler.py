@@ -747,7 +747,7 @@ class GeminiHandler:
                         {"role": "user",   "content": f"News Script:\n\n{short_script}"},
                     ],
                     temperature=0.3,
-                    max_tokens=150,
+                    max_tokens=250,
                 )
             raw = response.choices[0].message.content
             if not raw:
