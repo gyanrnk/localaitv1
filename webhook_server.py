@@ -432,6 +432,10 @@ def _send_bulletin_items_to_api(items: list):
                 (db_row.get('location_name') if db_row else None) or
                 'Telangana'
             )
+            from openai_handler import get_llm_handler as _get_llm
+            _te = _get_llm().translate_to_telugu(post_location)
+            if _te and _te.strip():
+                post_location = _te.strip()
             user_id = item.get('user_id') or (db_row.get('user_id') if db_row else None)
             if not user_id:
                 logger.warning(f"  ⏭️  Item {counter} — user_id missing, skipping")
