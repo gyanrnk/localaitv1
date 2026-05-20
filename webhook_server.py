@@ -375,10 +375,20 @@ def _send_bulletin_items_to_api(items: list):
             db_row     = _s3_map.get(counter, {})
             media_type = item.get("media_type") or (db_row.get("media_type") if db_row else "") or ""
 
-            # ── Duplicate check: already posted incident → skip ───────────────
+            # ── Duplicate check: stale snapshot first, then fresh DB confirm ────
             if db_row.get("incident_id"):
                 logger.info(f"  ⏭️  Item {counter} already has incident_id={db_row['incident_id']} — skip")
                 return None
+            # Fresh DB check catches race where two builds overlap before write-back
+            try:
+                _fresh = _db_items.fetchone(
+                    "SELECT incident_id FROM news_items WHERE counter = %s", (counter,)
+                )
+                if _fresh and _fresh.get("incident_id"):
+                    logger.info(f"  ⏭️  Item {counter} incident_id set by concurrent thread — skip")
+                    return None
+            except Exception:
+                pass
 
             # ── script text from S3 ──────────────────────────────────────────
             script_text = headline
@@ -457,6 +467,15 @@ def _send_bulletin_items_to_api(items: list):
                     or resp_data.get("id", "?")
                 )
                 logger.info(f"  ✅ Item {counter} → incident {incident_id}")
+
+                # Write incident_id immediately so concurrent threads see it
+                try:
+                    _db_items.execute(
+                        "UPDATE news_items SET incident_id = %s WHERE counter = %s",
+                        (str(incident_id), counter)
+                    )
+                except Exception as _dbe:
+                    logger.warning(f"  ⚠️ Immediate incident_id write failed: {_dbe}")
 
                 try:
                     # _req.post(f"{API_BASE_URL}/api/incidents/local", json=payload, timeout=5)
