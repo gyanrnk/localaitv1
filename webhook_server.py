@@ -402,14 +402,26 @@ def _send_bulletin_items_to_api(items: list):
                     pass
 
             # ── cover image: S3 key from DB ──────────────────────────────────
+            # upload_file_async is non-blocking — retry to allow upload to land.
             image_url = None
             s3_key_input = db_row.get("s3_key_input") if db_row else None
             if s3_key_input and media_type == "image":
-                image_url = _s3_items.public_url(s3_key_input)
+                for _ia in range(5):
+                    if _s3_items.file_exists(s3_key_input):
+                        image_url = _s3_items.public_url(s3_key_input)
+                        break
+                    if _ia < 4:
+                        logger.info(f"  ⏳ S3 image not ready yet (attempt {_ia+1}/5) — waiting 3s")
+                        sleep(3)
             elif s3_key_input and media_type == "video":
                 thumb_key = s3_key_input.rsplit('.', 1)[0] + '_thumb.jpg'
-                if _s3_items.file_exists(thumb_key):
-                    image_url = _s3_items.public_url(thumb_key)
+                for _ta in range(5):
+                    if _s3_items.file_exists(thumb_key):
+                        image_url = _s3_items.public_url(thumb_key)
+                        break
+                    if _ta < 4:
+                        logger.info(f"  ⏳ S3 thumbnail not ready yet (attempt {_ta+1}/5) — waiting 3s")
+                        sleep(3)
 
             # ── item video: item_cache from S3 (retry — async upload lag sakta hai) ──
             news_segment_url = None

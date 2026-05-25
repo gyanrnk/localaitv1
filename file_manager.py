@@ -103,17 +103,23 @@ class FileManager:
         local_video = _max_counter(INPUT_VIDEO_DIR, PREFIX_VIDEO)
         local_audio = _max_counter(INPUT_AUDIO_DIR, PREFIX_AUDIO)
 
-        # If local dirs are empty (fresh deployment), fall back to DB max counter
+        # If local dirs are empty (fresh deployment), fall back to DB max per media type.
+        # Use per-type max so image/video/audio counters don't collide on the same number.
         if local_image == 0 and local_video == 0 and local_audio == 0:
             try:
                 import db as _db
-                row = _db.fetchall("SELECT MAX(counter) AS mx FROM news_items")
-                db_max = int(row[0]['mx'] or 0) if row else 0
-                if db_max > 0:
-                    counters['image'] = db_max
-                    counters['video'] = db_max
-                    counters['audio'] = db_max
-                    print(f"[FileManager] DB max counter={db_max} (fresh deployment)")
+                rows = _db.fetchall("""
+                    SELECT media_type, MAX(counter) AS mx
+                    FROM news_items
+                    WHERE media_type IN ('image','video','audio')
+                    GROUP BY media_type
+                """)
+                db_map = {r['media_type']: int(r['mx'] or 0) for r in rows}
+                if any(db_map.values()):
+                    counters['image'] = db_map.get('image', 0)
+                    counters['video'] = db_map.get('video', 0)
+                    counters['audio'] = db_map.get('audio', 0)
+                    print(f"[FileManager] DB counters (fresh deploy): {db_map}")
                     return counters
             except Exception as e:
                 print(f"[FileManager] DB counter fallback failed: {e}")

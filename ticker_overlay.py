@@ -103,8 +103,14 @@ TICKER_START_T = float(INTRO_VIDEO_DURATION)
 # Strip render settings
 HEADLINE_FONTSIZE = 40
 AD_FONTSIZE       = 40
-HEADLINE_COLOR    = (255, 255, 255, 255)   # white
-AD_COLOR          = (255, 215, 0,   255)   # yellow
+HEADLINE_COLOR    = (255, 255, 255, 255)   # white text
+AD_COLOR          = (255, 215, 0,   255)   # yellow text
+
+# Strip background colors — MUST match ticker4.png pixel colors exactly.
+# omit_background=True is unreliable in headless Chromium inside Docker (renders white).
+# Using opaque backgrounds avoids that entirely: white text on crimson = visible.
+HEADLINE_BG = (129, 15, 5)    # dark crimson  — sampled from ticker4.png headline band
+AD_BG       = (0,   0,  0)    # black         — sampled from ticker4.png ad band
 
 AD_SEP = '      '
 
@@ -213,6 +219,7 @@ def _build_headline_html(headlines: list, font_size: int,
                           color: tuple, band_h: int,
                           est_w: int, repeats: int) -> str:
     r, g, b, _ = color
+    bg_r, bg_g, bg_b = HEADLINE_BG
 
     font_face = ""
     if TELUGU_FONT and os.path.exists(TELUGU_FONT):
@@ -228,7 +235,6 @@ def _build_headline_html(headlines: list, font_size: int,
         sep = (
             f'<img src="data:image/png;base64,{mic_b64}" '
             f'style="height:{int(font_size * 1.6)}px;vertical-align:middle;margin:0 25px;">'
-            # f'style="height:100px;vertical-align:middle;margin:0 25px;">'
         )
     else:
         sep = '   ❙   '
@@ -240,7 +246,7 @@ def _build_headline_html(headlines: list, font_size: int,
 <style>
 {font_face}
 * {{margin:0;padding:0;}}
-html,body {{width:{est_w}px;height:{band_h}px;background:rgba(0,0,0,0);}}
+html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
@@ -257,6 +263,7 @@ def _build_ad_html(ad_text: str, font_size: int,
                    color: tuple, band_h: int,
                    est_w: int, repeats: int) -> str:
     r, g, b, _ = color
+    bg_r, bg_g, bg_b = AD_BG
 
     font_face = ""
     if TELUGU_FONT and os.path.exists(TELUGU_FONT):
@@ -274,7 +281,7 @@ def _build_ad_html(ad_text: str, font_size: int,
 <style>
 {font_face}
 * {{margin:0;padding:0;}}
-html,body {{width:{est_w}px;height:{band_h}px;background:rgba(0,0,0,0);}}
+html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
@@ -337,7 +344,7 @@ def _render_strip(browser, html: str, band_h: int, out_path: str,
         page = browser.new_page(viewport={"width": tile_w, "height": band_h})
         page.goto(html_uri, wait_until="networkidle")
         page.evaluate("() => document.fonts.ready")
-        page.screenshot(path=tmp_png_path, omit_background=True)
+        page.screenshot(path=tmp_png_path)
         page.close()
 
         img = Image.open(tmp_png_path).convert('RGBA')

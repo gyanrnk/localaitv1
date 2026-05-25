@@ -512,24 +512,32 @@ class NewsBot:
                 #     if ii:
                 #         saved_image_paths.append(ii['input_path'])
                 # media_info['multi_images'] = saved_image_paths
-                saved_image_paths = []
- 
+                saved_image_paths = []    # local paths (used within same session)
+                saved_image_s3_keys = []  # S3 keys (survive restarts, stored in DB)
+
                 if primary_media_type == 'image' and media_info:
                     # First image already saved as primary — just reference it
                     saved_image_paths.append(media_info['input_path'])
+                    if media_info.get('s3_key_input'):
+                        saved_image_s3_keys.append(media_info['s3_key_input'])
                     # Save remaining images
                     for ip in local_images[1:]:
                         ii = self.file_manager.save_input_media(ip)
                         if ii:
                             saved_image_paths.append(ii['input_path'])
+                            if ii.get('s3_key_input'):
+                                saved_image_s3_keys.append(ii['s3_key_input'])
                 elif local_images:
                     # Primary is video — save ALL images separately (none saved yet)
                     for ip in local_images:
                         ii = self.file_manager.save_input_media(ip)
                         if ii:
                             saved_image_paths.append(ii['input_path'])
- 
+                            if ii.get('s3_key_input'):
+                                saved_image_s3_keys.append(ii['s3_key_input'])
+
                 media_info['multi_images'] = saved_image_paths
+                media_info['multi_image_s3_keys'] = saved_image_s3_keys  # persist in DB
                 # Primary video saved path
                 if local_videos:
                     media_info['multi_videos'].insert(0, media_info['input_path'])

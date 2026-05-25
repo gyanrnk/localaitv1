@@ -1458,7 +1458,11 @@ def append_news_item(item: Dict):
             original_text           = EXCLUDED.original_text,
             location_id             = EXCLUDED.location_id,
             location_name           = EXCLUDED.location_name,
-            sender_photo            = EXCLUDED.sender_photo
+            sender_photo            = EXCLUDED.sender_photo,
+            s3_key_input            = COALESCE(EXCLUDED.s3_key_input, news_items.s3_key_input),
+            s3_key_script_audio     = COALESCE(EXCLUDED.s3_key_script_audio, news_items.s3_key_script_audio),
+            s3_key_headline_audio   = COALESCE(EXCLUDED.s3_key_headline_audio, news_items.s3_key_headline_audio),
+            user_id                 = COALESCE(EXCLUDED.user_id, news_items.user_id)
     """, (
         item.get('counter'),
         item.get('media_type', 'video'),
