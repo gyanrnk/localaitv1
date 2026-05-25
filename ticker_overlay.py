@@ -288,6 +288,81 @@ html,body {{width:{est_w}px;height:{band_h}px;background:rgba(0,0,0,0);}}
 
 # ── Strip renderer ────────────────────────────────────────────────────────────
 
+def _render_strip(browser, html: str, band_h: int, out_path: str,
+                  label: str = '') -> int:
+    """
+    Two-pass render: Pass 1 measures actual content width via JS scrollWidth,
+    Pass 2 renders at that exact width — no blank tail in the strip.
+
+    Returns the tile width (half the saved PNG width), or 0 on failure.
+    """
+    from pathlib import Path as _Path
+    from PIL import Image
+    MEASURE_W  = 2048
+    MAX_CANVAS = 16_384
+    MIN_TILE_W = 2000
+
+    tmp_html = tempfile.NamedTemporaryFile(
+        delete=False, suffix='.html', mode='w', encoding='utf-8'
+    )
+    tmp_html.write(html)
+    tmp_html.close()
+    html_uri = _Path(tmp_html.name).as_uri()
+    tmp_png_f = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+    tmp_png_f.close()
+    tmp_png_path = tmp_png_f.name
+
+    try:
+        # Pass 1 — measure actual text width.
+        # Override body to auto-width and .t to inline-block so it shrinks to
+        # content. scrollWidth then equals actual rendered text width — no
+        # estimation, works for Telugu glyphs (~22px at 40px font-size).
+        page = browser.new_page(viewport={"width": MEASURE_W, "height": band_h})
+        page.goto(html_uri, wait_until="networkidle")
+        page.evaluate("() => document.fonts.ready")
+        actual_w = page.evaluate("""() => {
+            document.documentElement.style.width = 'auto';
+            document.body.style.width = 'auto';
+            var t = document.querySelector('.t');
+            if (!t) return 0;
+            t.style.display = 'inline-block';
+            return t.scrollWidth;
+        }""")
+        page.close()
+
+        tile_w = min(max(int(actual_w), MIN_TILE_W), MAX_CANVAS)
+        print(f"  [TICKER] {label}: measured={actual_w}px -> tile_w={tile_w}px")
+
+        # Pass 2 — render at exact tile width (viewport = content width → no blank tail).
+        page = browser.new_page(viewport={"width": tile_w, "height": band_h})
+        page.goto(html_uri, wait_until="networkidle")
+        page.evaluate("() => document.fonts.ready")
+        page.screenshot(path=tmp_png_path, omit_background=True)
+        page.close()
+
+        img = Image.open(tmp_png_path).convert('RGBA')
+        non_blank = any(a > 0 for a in img.getdata(band=3))
+        if not non_blank:
+            print(f"  [TICKER] WARNING {label}: strip is blank after render!")
+
+        doubled = Image.new('RGBA', (img.width * 2, band_h), (0, 0, 0, 0))
+        doubled.paste(img, (0, 0))
+        doubled.paste(img, (img.width, 0))
+        doubled.save(out_path, 'PNG')
+        tile_px = img.width
+        print(f"  [TICKER] {label}: saved {img.width * 2}x{band_h}px (tile={tile_px}px)")
+        img.close()
+        doubled.close()
+        return tile_px
+
+    finally:
+        for f in [tmp_html.name, tmp_png_path]:
+            try:
+                os.unlink(f)
+            except Exception:
+                pass
+
+
 def _render_strips_both(headlines: list, ad_text: str,
                          hl_path: str, ad_path: str) -> bool:
     """Dono strips ek hi Playwright browser session mein render karo."""
@@ -298,73 +373,31 @@ def _render_strips_both(headlines: list, ad_text: str,
     def _run():
         try:
             from playwright.sync_api import sync_playwright
-            from PIL import Image
 
             with sync_playwright() as p:
-                browser = p.chromium.launch(args=['--no-sandbox', '--disable-gpu'])
+                browser = p.chromium.launch(args=[
+                    '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'
+                ])
 
-                # ── Headline strip ────────────────────────────────────────
-                hl_single_w = max(
-                    sum(len(h) for h in headlines) * HEADLINE_FONTSIZE + 200,
-                    3000
-                )
-                hl_repeats = max(3, 30000 // hl_single_w)
-                hl_est_w   = min(hl_single_w * hl_repeats, 30000)
-
+                # est_w=32768 so the HTML body is wider than any content;
+                # _render_strip's Pass 1 JS overrides this to measure the real width.
                 hl_html = _build_headline_html(
                     headlines, HEADLINE_FONTSIZE, HEADLINE_COLOR,
-                    HEADLINE_BAND_H, hl_est_w, hl_repeats
+                    HEADLINE_BAND_H, 32768, 1
                 )
-                tmp_hl_html = tempfile.mktemp(suffix='_hl.html')
-                tmp_hl_png  = tempfile.mktemp(suffix='_hl.png')
-                with open(tmp_hl_html, 'w', encoding='utf-8') as f:
-                    f.write(hl_html)
-
-                page = browser.new_page(viewport={"width": hl_est_w, "height": HEADLINE_BAND_H})
-                page.goto(f"file:///{tmp_hl_html}", wait_until="networkidle")
-                page.screenshot(path=tmp_hl_png, omit_background=True)
-                page.close()
-                os.unlink(tmp_hl_html)
-
-                img = Image.open(tmp_hl_png).convert('RGBA')
-                doubled = Image.new('RGBA', (img.width * 2, HEADLINE_BAND_H), (0, 0, 0, 0))
-                doubled.paste(img, (0, 0))
-                doubled.paste(img, (img.width, 0))
-                doubled.save(hl_path, 'PNG')
-                print(f"  🖼️  [TICKER] Headline strip: {img.width * 2}×{HEADLINE_BAND_H}px")
-                img.close()
-                doubled.close()
-                os.unlink(tmp_hl_png)
-
-                # ── Ad strip ─────────────────────────────────────────────
-                ad_single_w = max(len(ad_text) * AD_FONTSIZE, 3000)
-                ad_repeats  = max(3, 30000 // ad_single_w)
-                ad_est_w    = min(ad_single_w * ad_repeats, 30000)
+                hl_tile_w = _render_strip(browser, hl_html, HEADLINE_BAND_H, hl_path, 'Headline')
+                if not hl_tile_w:
+                    result_q.put(False)
+                    return
 
                 ad_html = _build_ad_html(
                     ad_text, AD_FONTSIZE, AD_COLOR,
-                    AD_BAND_H, ad_est_w, ad_repeats
+                    AD_BAND_H, 32768, 1
                 )
-                tmp_ad_html = tempfile.mktemp(suffix='_ad.html')
-                tmp_ad_png  = tempfile.mktemp(suffix='_ad.png')
-                with open(tmp_ad_html, 'w', encoding='utf-8') as f:
-                    f.write(ad_html)
-
-                page = browser.new_page(viewport={"width": ad_est_w, "height": AD_BAND_H})
-                page.goto(f"file:///{tmp_ad_html}", wait_until="networkidle")
-                page.screenshot(path=tmp_ad_png, omit_background=True)
-                page.close()
-                os.unlink(tmp_ad_html)
-
-                img = Image.open(tmp_ad_png).convert('RGBA')
-                doubled = Image.new('RGBA', (img.width * 2, AD_BAND_H), (0, 0, 0, 0))
-                doubled.paste(img, (0, 0))
-                doubled.paste(img, (img.width, 0))
-                doubled.save(ad_path, 'PNG')
-                print(f"  🖼️  [TICKER] Ad strip: {img.width * 2}×{AD_BAND_H}px")
-                img.close()
-                doubled.close()
-                os.unlink(tmp_ad_png)
+                ad_tile_w = _render_strip(browser, ad_html, AD_BAND_H, ad_path, 'Ad')
+                if not ad_tile_w:
+                    result_q.put(False)
+                    return
 
                 browser.close()
 
@@ -372,92 +405,14 @@ def _render_strips_both(headlines: list, ad_text: str,
 
         except Exception as e:
             import traceback
-            print(f"  ❌ [TICKER] Strip error: {e}")
+            print(f"  [TICKER] Strip render error: {e}")
             traceback.print_exc()
             result_q.put(False)
 
     t = threading.Thread(target=_run)
     t.start()
-    t.join(timeout=120)
+    t.join(timeout=180)
     return result_q.get() if not result_q.empty() else False
-
-# def _render_strips_both(headlines: list, ad_text: str,
-#                          hl_path: str, ad_path: str) -> bool:
-#     """
-#     Both ticker strips via the shared renderer.
-
-#     Strategy: render ONE tile (single pass, ~3-5000px max), then PIL doubles
-#     it. FFmpeg's mod(t*speed, tile_width) gives infinite seamless scroll —
-#     requirement is just tile_width >= SCROLL_WINDOW_WIDTH (1705 / 1649).
-
-#     No more 30000px viewports → Chromium never OOMs on this call.
-#     """
-#     try:
-#         from PIL import Image
-#         from pw_renderer import renderer
-
-#         # ── Headline strip ──────────────────────────────────────────────────
-#         # Tile must be >= scroll window (1705) for seamless wrap. Add a margin.
-#         # Cap at 6000 — even very long headlines look fine wrapped/scrolled.
-#         hl_natural = sum(len(h) for h in headlines) * HEADLINE_FONTSIZE + 200
-#         hl_tile_w  = max(min(hl_natural, 6000), HEADLINE_SCROLL_W + 500)
-
-#         hl_html = _build_headline_html(
-#             headlines, HEADLINE_FONTSIZE, HEADLINE_COLOR,
-#             HEADLINE_BAND_H, hl_tile_w, 1,        # repeats = 1
-#         )
-
-#         tmp_hl_png = renderer.render(
-#             html=hl_html,
-#             viewport={"width": hl_tile_w, "height": HEADLINE_BAND_H},
-#         )
-#         if tmp_hl_png is None:
-#             print(f"  ❌ [TICKER] Headline render returned None")
-#             return False
-
-#         img = Image.open(tmp_hl_png).convert("RGBA")
-#         # Double horizontally so FFmpeg's mod-scroll wraps seamlessly.
-#         doubled = Image.new("RGBA", (img.width * 2, HEADLINE_BAND_H), (0, 0, 0, 0))
-#         doubled.paste(img, (0, 0))
-#         doubled.paste(img, (img.width, 0))
-#         doubled.save(hl_path, "PNG")
-#         print(f"  🖼️  [TICKER] Headline strip: tile={img.width}px → doubled={img.width*2}×{HEADLINE_BAND_H}")
-#         img.close()
-#         doubled.close()
-
-#         # ── Ad strip ────────────────────────────────────────────────────────
-#         ad_natural = len(ad_text) * AD_FONTSIZE + 200
-#         ad_tile_w  = max(min(ad_natural, 6000), AD_SCROLL_W + 500)
-
-#         ad_html = _build_ad_html(
-#             ad_text, AD_FONTSIZE, AD_COLOR,
-#             AD_BAND_H, ad_tile_w, 1,
-#         )
-
-#         tmp_ad_png = renderer.render(
-#             html=ad_html,
-#             viewport={"width": ad_tile_w, "height": AD_BAND_H},
-#         )
-#         if tmp_ad_png is None:
-#             print(f"  ❌ [TICKER] Ad render returned None")
-#             return False
-
-#         img = Image.open(tmp_ad_png).convert("RGBA")
-#         doubled = Image.new("RGBA", (img.width * 2, AD_BAND_H), (0, 0, 0, 0))
-#         doubled.paste(img, (0, 0))
-#         doubled.paste(img, (img.width, 0))
-#         doubled.save(ad_path, "PNG")
-#         print(f"  🖼️  [TICKER] Ad strip: tile={img.width}px → doubled={img.width*2}×{AD_BAND_H}")
-#         img.close()
-#         doubled.close()
-
-#         return True
-
-#     except Exception as e:
-#         import traceback
-#         print(f"  ❌ [TICKER] Strip error: {e}")
-#         traceback.print_exc()
-#         return False
 
 
 # ── Segment trimmers ──────────────────────────────────────────────────────────
