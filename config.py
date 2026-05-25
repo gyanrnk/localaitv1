@@ -56,6 +56,25 @@ def get_channel_logo_path(channel_name: str, base_dir: str = None) -> str:
     return os.path.join(_base, 'assets', 'logo3.mov')
 
 
+def get_channel_cap1_path(channel_name: str, base_dir: str = None) -> str:
+    """
+    Returns channel-specific cap1 (break-news) video path.
+    Looks for assets/cap1_{channel_lower}.mp4 first, falls back to assets/cap1.mp4.
+
+    File naming convention on VPS:
+        assets/cap1_kurnool.mp4
+        assets/cap1_karimnagar.mp4
+        assets/cap1_tirupati.mp4
+        assets/cap1.mp4          <- default fallback
+    """
+    _base = base_dir or BASE_DIR
+    channel_key = channel_name.lower().replace(' ', '_').replace('-', '_')
+    specific = os.path.join(_base, 'assets', f'cap1_{channel_key}.mp4')
+    if os.path.exists(specific):
+        return specific
+    return os.path.join(_base, 'assets', 'cap1.mp4')
+
+
 def get_channel_tts_provider(channel_name: str) -> str:
     """
     Returns 'sarvam' or 'gcp' for the given channel.

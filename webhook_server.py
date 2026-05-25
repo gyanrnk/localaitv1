@@ -922,7 +922,9 @@ def _run_planner():
                         except Exception:
                             pass
                     # ─────────────────────────────────────────────────────
-                    vp = queue_bulletin_build(bulletin_dir, logo_path, intro_path, ticker_text=ticker_text)
+                    vp = queue_bulletin_build(bulletin_dir, logo_path, intro_path,
+                                              ticker_text=ticker_text,
+                                              channel_name=channel_name)
 
                     _build_result['video_path'] = vp
                     logger.info(f"🔨 [BUILD-THREAD] Done → {vp}")

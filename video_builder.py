@@ -1942,7 +1942,8 @@ def build_multi_media_news_segment(
  
  
 def build_bulletin_video(bulletin_dir: str, logo_path: str,
-                         intro_path: str,ticker_text: str = None) -> Optional[str]:
+                         intro_path: str, ticker_text: str = None,
+                         channel_name: str = '') -> Optional[str]:
     print("\n" + "=" * 60)
     print("🎬 BUILDING BULLETIN VIDEO")
     print("=" * 60)
@@ -2074,9 +2075,10 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
         return None
     all_segments.append(intro_seg)
     log.info(f"[CHECKPOINT-2] Intro built | seg={intro_seg} | dur={_video_duration(intro_seg):.2f}s")
+    from config import get_channel_cap1_path as _get_cap1
     filler_png  = os.path.join(BASE_DIR, 'assets', 'filler.mp4')
     break_video = os.path.join(BASE_DIR, 'assets', 'break.mp4')
-    break_news  = os.path.join(BASE_DIR, 'assets', 'cap1.mp4')
+    break_news  = _get_cap1(channel_name, BASE_DIR)
     break_media = break_video if os.path.exists(break_video) else filler_png
 
     intro_break_seg = os.path.join(segments_dir, f'{str(seg_idx).zfill(3)}_break_after_intro.mp4')
@@ -2890,22 +2892,32 @@ def _latest_bulletin_dir():
  
 if __name__ == '__main__':
     import sys
+    import argparse as _ap
     from config import BASE_DIR
- 
-    if len(sys.argv) >= 2:
-        bulletin_dir = sys.argv[1]
-    else:
+
+    _parser = _ap.ArgumentParser()
+    _parser.add_argument('bulletin_dir', nargs='?', default=None)
+    _parser.add_argument('logo', nargs='?', default=None)
+    _parser.add_argument('intro', nargs='?', default=None)
+    _parser.add_argument('--ticker', default='')
+    _parser.add_argument('--channel', default='')
+    _cli = _parser.parse_args()
+
+    bulletin_dir = _cli.bulletin_dir
+    if not bulletin_dir:
         bulletin_dir = _latest_bulletin_dir()
         if not bulletin_dir:
             from bulletin_builder import build_bulletin
             bulletin_dir = build_bulletin(5)
         if not bulletin_dir:
             sys.exit(1)
- 
-    logo  = sys.argv[2] if len(sys.argv) >= 3 else os.path.join(BASE_DIR, 'assets', 'logo3.mov')
-    intro = sys.argv[3] if len(sys.argv) >= 4 else os.path.join(BASE_DIR, 'assets', 'intro4.mp4')
- 
-    result = build_bulletin_video(bulletin_dir, logo, intro)
+
+    logo  = _cli.logo  or os.path.join(BASE_DIR, 'assets', 'logo3.mov')
+    intro = _cli.intro or os.path.join(BASE_DIR, 'assets', 'intro4.mp4')
+
+    result = build_bulletin_video(bulletin_dir, logo, intro,
+                                  ticker_text=_cli.ticker or None,
+                                  channel_name=_cli.channel)
     if result:
         print(f"Done: {result}")
     else:

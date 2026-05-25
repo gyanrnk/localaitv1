@@ -142,7 +142,8 @@ def launch_streamer() -> subprocess.Popen:
 def launch_builder(bulletin_dir: str = None,
                    logo_path: str = None,
                    intro_path: str = None,
-                   ticker_text: str = '') -> subprocess.Popen:
+                   ticker_text: str = '',
+                   channel_name: str = '') -> subprocess.Popen:
     """
     video_builder.py ko low CPU priority + cpulimit ke saath launch karo.
 
@@ -151,6 +152,7 @@ def launch_builder(bulletin_dir: str = None,
         logo_path    : logo file path (optional)
         intro_path   : intro video path (optional)
         ticker_text  : ticker text (optional)
+        channel_name : channel/location name for per-channel assets (optional)
 
     Returns: Popen process handle
     """
@@ -163,6 +165,8 @@ def launch_builder(bulletin_dir: str = None,
         args.append(intro_path)
     if ticker_text:
         args += ['--ticker', ticker_text]
+    if channel_name:
+        args += ['--channel', channel_name]
 
     cmd = _build_builder_cmd(args)
 
@@ -268,8 +272,10 @@ if __name__ == "__main__":
         _p.add_argument('logo', nargs='?')
         _p.add_argument('intro', nargs='?')
         _p.add_argument('--ticker', default='')
+        _p.add_argument('--channel', default='')
         _args = _p.parse_args()
-        proc  = launch_builder(_args.bdir, _args.logo, _args.intro, ticker_text=_args.ticker)
+        proc  = launch_builder(_args.bdir, _args.logo, _args.intro,
+                               ticker_text=_args.ticker, channel_name=_args.channel)
         try:
             rc = proc.wait()
             sys.exit(rc)

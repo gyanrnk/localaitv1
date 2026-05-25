@@ -47,6 +47,7 @@ class BuildJob:
     logo_path    : str
     intro_path   : str
     ticker_text  : str = ''
+    channel_name : str = ''
     job_id       : str = field(default_factory=lambda: str(int(time.time() * 1000)))
     queued_at    : float = field(default_factory=time.time)
     status       : str = "queued"   # queued | building | done | failed
@@ -77,7 +78,8 @@ class BuildQueue:
     # def submit(self, bulletin_dir: str, logo_path: str,
     #            intro_path: str, block: bool = True) -> Optional[str]:
     def submit(self, bulletin_dir: str, logo_path: str,
-               intro_path: str, ticker_text: str = '', block: bool = True) -> Optional[str]:
+               intro_path: str, ticker_text: str = '', channel_name: str = '',
+               block: bool = True) -> Optional[str]:
         """
         Build job queue mein daalo.
 
@@ -96,6 +98,7 @@ class BuildQueue:
             logo_path=logo_path,
             intro_path=intro_path,
             ticker_text=ticker_text,
+            channel_name=channel_name,
         )
 
         with self._lock:
@@ -158,8 +161,10 @@ class BuildQueue:
             cmd.append(job.logo_path)
         if job.intro_path:
             cmd.append(job.intro_path)
-        if job.ticker_text:                     # ← ADD THIS
-            cmd += ['--ticker', job.ticker_text] # ← ADD THIS
+        if job.ticker_text:
+            cmd += ['--ticker', job.ticker_text]
+        if job.channel_name:
+            cmd += ['--channel', job.channel_name]
 
         # Agar process_wrapper nahi hai to directly chalao
         if not (BASE_DIR / "process_wrapper.py").exists():
@@ -355,7 +360,9 @@ build_queue_instance = BuildQueue()
 
 def queue_bulletin_build(bulletin_dir: str,
                          logo_path: str,
-                         intro_path: str, ticker_text='') -> Optional[str]:
+                         intro_path: str,
+                         ticker_text: str = '',
+                         channel_name: str = '') -> Optional[str]:
     """
     webhook_server.py mein build_bulletin_video() ki jagah yeh use karo.
 
@@ -365,7 +372,10 @@ def queue_bulletin_build(bulletin_dir: str,
     BAAD (sirf yeh ek line change):
         video_path = queue_bulletin_build(bulletin_dir, logo_path, intro_path)
     """
-    return build_queue_instance.submit(bulletin_dir, logo_path, intro_path, ticker_text=ticker_text, block=True)
+    return build_queue_instance.submit(bulletin_dir, logo_path, intro_path,
+                                       ticker_text=ticker_text,
+                                       channel_name=channel_name,
+                                       block=True)
 
 
 
