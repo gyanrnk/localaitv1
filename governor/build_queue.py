@@ -158,6 +158,8 @@ class BuildQueue:
             cmd.append(job.logo_path)
         if job.intro_path:
             cmd.append(job.intro_path)
+        if job.ticker_text:                     # ← ADD THIS
+            cmd += ['--ticker', job.ticker_text] # ← ADD THIS
 
         # Agar process_wrapper nahi hai to directly chalao
         if not (BASE_DIR / "process_wrapper.py").exists():

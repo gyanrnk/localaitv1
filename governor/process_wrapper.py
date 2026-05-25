@@ -141,7 +141,8 @@ def launch_streamer() -> subprocess.Popen:
 
 def launch_builder(bulletin_dir: str = None,
                    logo_path: str = None,
-                   intro_path: str = None) -> subprocess.Popen:
+                   intro_path: str = None,
+                   ticker_text: str = '') -> subprocess.Popen:
     """
     video_builder.py ko low CPU priority + cpulimit ke saath launch karo.
 
@@ -149,6 +150,7 @@ def launch_builder(bulletin_dir: str = None,
         bulletin_dir : bulletin directory path (optional — latest auto-detect hogi)
         logo_path    : logo file path (optional)
         intro_path   : intro video path (optional)
+        ticker_text  : ticker text (optional)
 
     Returns: Popen process handle
     """
@@ -159,6 +161,8 @@ def launch_builder(bulletin_dir: str = None,
         args.append(logo_path)
     if intro_path:
         args.append(intro_path)
+    if ticker_text:
+        args += ['--ticker', ticker_text]
 
     cmd = _build_builder_cmd(args)
 
@@ -244,17 +248,28 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             proc.terminate()
 
+    # elif mode == "builder":
+    #     bdir  = sys.argv[2] if len(sys.argv) > 2 else None
+    #     logo  = sys.argv[3] if len(sys.argv) > 3 else None
+    #     intro = sys.argv[4] if len(sys.argv) > 4 else None
+    #     proc  = launch_builder(bdir, logo, intro)
+    #     try:
+    #         rc = proc.wait()
+    #         sys.exit(rc)          # ← video_builder ka exit code parent ko do
+    #     except KeyboardInterrupt:
+    #         proc.terminate()
+    #         sys.exit(1)
+
     elif mode == "builder":
-        bdir  = sys.argv[2] if len(sys.argv) > 2 else None
-        logo  = sys.argv[3] if len(sys.argv) > 3 else None
-        intro = sys.argv[4] if len(sys.argv) > 4 else None
-        proc  = launch_builder(bdir, logo, intro)
-        try:
-            rc = proc.wait()
-            sys.exit(rc)          # ← video_builder ka exit code parent ko do
-        except KeyboardInterrupt:
-            proc.terminate()
-            sys.exit(1)
+        import argparse as _ap
+        _p = _ap.ArgumentParser()
+        _p.add_argument('mode')
+        _p.add_argument('bdir', nargs='?')
+        _p.add_argument('logo', nargs='?')
+        _p.add_argument('intro', nargs='?')
+        _p.add_argument('--ticker', default='')
+        _args = _p.parse_args()
+        proc  = launch_builder(_args.bdir, _args.logo, _args.intro, ticker_text=_args.ticker)
 
     elif mode == "both":
         bdir  = sys.argv[2] if len(sys.argv) > 2 else None
