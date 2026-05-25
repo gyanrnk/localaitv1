@@ -779,29 +779,70 @@ def _run_planner():
             logger.warning("⚠️ No items — bulletin not built")
             return
 
-        # ── Ticker text: saare metadata items ki headlines join karo ──────────
-        from bulletin_builder import load_metadata
-        from datetime import datetime, timedelta, timezone
+        # # ── Ticker text: saare metadata items ki headlines join karo ──────────
+        # from bulletin_builder import load_metadata
+        # from datetime import datetime, timedelta, timezone
 
-        _all_meta = load_metadata()
+        # _all_meta = load_metadata()
+        # _cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        # seen = set()
+        # _headlines = []
+        # for item in _all_meta:
+        #     h = item.get('headline', '').strip()
+        #     if not h or h in seen:
+        #         continue
+        #     ts_str = item.get('created_at') or item.get('timestamp', '')
+        #     try:
+        #         ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+        #         if ts.tzinfo is None:
+        #             ts = ts.replace(tzinfo=timezone.utc)
+        #         if ts >= _cutoff:
+        #             seen.add(h)
+        #             _headlines.append(h)
+        #     except Exception:
+        #         _headlines.append(h)
+        # ticker_text = '   ★   '.join(_headlines) if _headlines else "తాజా వార్తల కోసం చూస్తూ ఉండండి"
+
+        # ── Ticker text: directly from DB (load_metadata is commented out) ───
+        from datetime import datetime, timedelta, timezone
+        import db as _db
+
         _cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        try:
+            _all_meta = _db.fetchall(
+                "SELECT headline, timestamp FROM news_items "
+                "WHERE timestamp::timestamptz >= NOW() - INTERVAL '24 hours' "
+                "ORDER BY counter ASC"
+            )
+        except Exception as _e:
+            logger.warning(f"⚠️ [TICKER] DB fetch failed: {_e}")
+            _all_meta = []
+
         seen = set()
         _headlines = []
         for item in _all_meta:
-            h = item.get('headline', '').strip()
+            h = (item.get('headline') or '').strip()
             if not h or h in seen:
                 continue
-            ts_str = item.get('created_at') or item.get('timestamp', '')
+            seen.add(h)
+            _headlines.append(h)
+
+        # Fallback: if 24hr window empty, grab latest available
+        if not _headlines:
             try:
-                ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                if ts >= _cutoff:
-                    seen.add(h)
-                    _headlines.append(h)
+                _all_meta = _db.fetchall(
+                    "SELECT headline FROM news_items ORDER BY counter DESC LIMIT 50"
+                )
+                for item in _all_meta:
+                    h = (item.get('headline') or '').strip()
+                    if h and h not in seen:
+                        seen.add(h)
+                        _headlines.append(h)
             except Exception:
-                _headlines.append(h)
+                pass
+
         ticker_text = '   ★   '.join(_headlines) if _headlines else "తాజా వార్తల కోసం చూస్తూ ఉండండి"
+        # ─────────────────────────────────────────────────────────────────────
         # ─────────────────────────────────────────────────────────────────────
 
 
