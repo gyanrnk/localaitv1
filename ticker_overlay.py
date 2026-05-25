@@ -500,7 +500,8 @@ def _concat_clips(clips: list, out: str):
 
 def add_ticker_overlay(video_path: str, out_path: str,
                        filler_start: float = None,
-                       skip_ranges: list = None) -> bool:
+                       skip_ranges: list = None,
+                       ticker_text: str = None) -> bool:
     import time as _time
 
     print("\n" + "─" * 50)
@@ -511,7 +512,15 @@ def add_ticker_overlay(video_path: str, out_path: str,
     if not os.path.exists(TICKER_PNG_PATH):
         print(f"  ❌ ticker3.png not found: {TICKER_PNG_PATH}"); return False
 
-    headlines = _load_24hr_headlines()
+    if ticker_text and ticker_text.strip():
+        # Split on ★ separator (same separator used when building the string)
+        raw = [h.strip() for h in ticker_text.replace('★', '\n').splitlines()]
+        headlines = [h for h in raw if h]
+        if not headlines:
+            headlines = _load_24hr_headlines()
+        print(f"  ✅ [TICKER] {len(headlines)} headlines from ticker_text arg")
+    else:
+        headlines = _load_24hr_headlines()
     ad_text   = _load_ad_texts()
 
     try:

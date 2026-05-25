@@ -2791,7 +2791,8 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
  
             if add_ticker_overlay(staging_path, tickered_path,
                                 filler_start=filler_start_time,
-                                skip_ranges=injection_skip_ranges if injection_skip_ranges else None):
+                                skip_ranges=injection_skip_ranges if injection_skip_ranges else None,
+                                ticker_text=ticker_text):
                 # Ticker done → atomic rename to final name
                 import time as _t2
                 for _ta in range(6):
