@@ -1106,7 +1106,6 @@ def _run_planner():
             build_thread.join(timeout=1800)
 
             video_path = _build_result.get('video_path')
-            print(1044, video_path)
             if not video_path:
                 logger.error(f"❌ Bulletin video build failed for [{loc_id}] {info.get('location_name')}")
                 continue

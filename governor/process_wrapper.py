@@ -270,6 +270,12 @@ if __name__ == "__main__":
         _p.add_argument('--ticker', default='')
         _args = _p.parse_args()
         proc  = launch_builder(_args.bdir, _args.logo, _args.intro, ticker_text=_args.ticker)
+        try:
+            rc = proc.wait()
+            sys.exit(rc)
+        except KeyboardInterrupt:
+            proc.terminate()
+            sys.exit(1)
 
     elif mode == "both":
         bdir  = sys.argv[2] if len(sys.argv) > 2 else None
