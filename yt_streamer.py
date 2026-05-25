@@ -525,7 +525,7 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
     global _train_rotation_idx
     if not bulletins:
         debug(f"[{label}] No bulletins — skipping concat build")
-        return concat_path
+        return None
 
     # ── Filler loop mode: intro/notebooklm/filler assets — no bulletin mixing ──
     # Real bulletins always have 'bul_' in their filename; assets never do.
@@ -533,7 +533,7 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
         valid = [b for b in bulletins if _is_valid_mp4(b)]
         if not valid:
             debug(f"[{label}] All filler files invalid — nothing to write")
-            return concat_path
+            return None
         lines = [f"file '{str(b)}'" for b in valid]
         reps  = max(1, 500 // len(valid))
         concat_path.write_text("\n".join(lines * reps) + "\n", encoding="utf-8")
@@ -587,7 +587,7 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
 
     if not lines:
         debug(f"[{label}] No valid files after validation — concat list empty")
-        return concat_path
+        return None
 
     repeated = lines * 10
     concat_path.write_text("\n".join(repeated) + "\n", encoding="utf-8")
@@ -798,10 +798,10 @@ def _launch_streams(inject_type=None, inject_payload=None):
             debug(f"[{ch['label']}] No bulletins and no intro — skipping")
         inj_t = inject_type    if i == 0 else None
         inj_p = inject_payload if i == 0 else None
-        build_concat_list(bulletins, ch["concat"], ch["label"], inj_t, inj_p)
+        wrote = build_concat_list(bulletins, ch["concat"], ch["label"], inj_t, inj_p)
         # Combined filler is pre-encoded (720p/25fps/baseline/no-B-frames) — copy mode is safe.
         p = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"]) \
-            if (bulletins and ch["stream_key"]) else None
+            if (wrote and ch["stream_key"]) else None
         if p:
             monitor_ffmpeg(p, ch["label"])
         procs.append(p)
@@ -886,9 +886,13 @@ def run_streamer():
                         fresh_buls = _with_fallback(ch["watch_dir"], ch["name"])
                         last_buls[i] = fresh_buls
                         if (fresh_buls or FILLER_FILE.exists()) and ch["stream_key"]:
-                            build_concat_list(fresh_buls, ch["concat"], ch["label"])
-                            procs[i] = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"])
-                            if procs[i]: monitor_ffmpeg(procs[i], ch["label"])
+                            wrote = build_concat_list(fresh_buls, ch["concat"], ch["label"])
+                            if wrote:
+                                procs[i] = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"])
+                                if procs[i]: monitor_ffmpeg(procs[i], ch["label"])
+                            else:
+                                debug(f"[{ch['label']}] concat list empty after rebuild — skipping restart")
+                                procs[i] = None
                         else:
                             procs[i] = None
 
