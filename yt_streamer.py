@@ -275,6 +275,29 @@ def debug(msg):
     print(f"[{datetime.now(IST).strftime('%H:%M:%S')}] {msg}")
 
 
+def _is_valid_mp4(path: Path, min_size: int = 100_000) -> bool:
+    """Return True only if the file exists, has minimum size, and ffprobe can read both
+    video stream and duration (catches truncated/missing-moov-atom files)."""
+    try:
+        if not path.exists() or path.stat().st_size < min_size:
+            return False
+        r = subprocess.run(
+            ["ffprobe", "-v", "error",
+             "-select_streams", "v:0",
+             "-show_entries", "stream=codec_type:format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1",
+             str(path)],
+            capture_output=True, text=True, timeout=15
+        )
+        if r.returncode != 0:
+            return False
+        out = r.stdout.strip()
+        # Must have both a duration value and confirm it decoded at least one stream
+        return bool(out) and "N/A" not in out
+    except Exception:
+        return False
+
+
 def get_all_bulletins(folder):
     p = Path(folder)
     if not p.exists():
@@ -291,19 +314,9 @@ def get_all_bulletins(folder):
     files = []
     for bul in bulletin_dirs[:MAX_BULLETINS_IN_ROTATION]:
         final = bul / f"{bul.name}.mp4"
-        if not (final.exists() and final.stat().st_size > 100_000):
-            continue
-        # Skip corrupt files (missing moov atom)
-        try:
-            r = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "default=noprint_wrappers=1:nokey=1", str(final)],
-                capture_output=True, text=True, timeout=10
-            )
-            if r.returncode != 0 or not r.stdout.strip():
+        if not _is_valid_mp4(final):
+            if final.exists():
                 debug(f"⚠️ Skipping corrupt bulletin: {final.name}")
-                continue
-        except Exception:
             continue
         files.append(final)
 
@@ -517,27 +530,50 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
     # ── Filler loop mode: intro/notebooklm/filler assets — no bulletin mixing ──
     # Real bulletins always have 'bul_' in their filename; assets never do.
     if not any('bul_' in b.name for b in bulletins):
-        lines = [f"file '{str(b)}'" for b in bulletins]
-        reps  = max(1, 500 // len(bulletins))
+        valid = [b for b in bulletins if _is_valid_mp4(b)]
+        if not valid:
+            debug(f"[{label}] All filler files invalid — nothing to write")
+            return concat_path
+        lines = [f"file '{str(b)}'" for b in valid]
+        reps  = max(1, 500 // len(valid))
         concat_path.write_text("\n".join(lines * reps) + "\n", encoding="utf-8")
-        debug(f"[{label}] {concat_path.name}: filler loop — {[b.name for b in bulletins]} ×{reps}")
+        debug(f"[{label}] {concat_path.name}: filler loop — {[b.name for b in valid]} ×{reps}")
         return concat_path
 
     vege_path   = fetch_latest_vege()
     train_clips = [t for t in fetch_train_clips() if t]
-    lines       = []
+
+    # Validate inject and filler candidates up front
+    if vege_path and not _is_valid_mp4(vege_path):
+        debug(f"[{label}] ⚠️ vege file invalid — skipping")
+        vege_path = None
+    train_clips = [t for t in train_clips if _is_valid_mp4(t)]
+
+    lines = []
 
     if inject_type and inject_type != "news" and inject_payload:
         if inject_type == "train" and isinstance(inject_payload, list):
-            clip = inject_payload[_train_rotation_idx % len(inject_payload)]
-            _train_rotation_idx += 1
-            lines.append(f"file \'{str(clip)}\'")
-            debug(f"[{label}] Inject train: {clip.name}")
+            valid_inject = [c for c in inject_payload if _is_valid_mp4(c)]
+            if valid_inject:
+                clip = valid_inject[_train_rotation_idx % len(valid_inject)]
+                _train_rotation_idx += 1
+                lines.append(f"file \'{str(clip)}\'")
+                debug(f"[{label}] Inject train: {clip.name}")
+            else:
+                debug(f"[{label}] ⚠️ All inject train clips invalid — skipping inject")
         elif isinstance(inject_payload, Path):
-            lines.append(f"file \'{str(inject_payload)}\'")
-            debug(f"[{label}] Inject {inject_type}: {inject_payload.name}")
+            if _is_valid_mp4(inject_payload):
+                lines.append(f"file \'{str(inject_payload)}\'")
+                debug(f"[{label}] Inject {inject_type}: {inject_payload.name}")
+            else:
+                debug(f"[{label}] ⚠️ Inject file invalid ({inject_payload.name}) — skipping")
 
+    skipped = 0
     for i, news in enumerate(bulletins):
+        if not _is_valid_mp4(news):
+            debug(f"[{label}] ⚠️ Corrupt bulletin skipped: {news.name}")
+            skipped += 1
+            continue
         lines.append(f"file \'{str(news)}\'")
         if i % 2 == 0 and vege_path:
             lines.append(f"file \'{str(vege_path)}\'")
@@ -546,9 +582,16 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
             _train_rotation_idx += 1
             lines.append(f"file \'{str(t)}\'")
 
+    if skipped:
+        debug(f"[{label}] ⚠️ {skipped}/{len(bulletins)} bulletins skipped (corrupt)")
+
+    if not lines:
+        debug(f"[{label}] No valid files after validation — concat list empty")
+        return concat_path
+
     repeated = lines * 10
     concat_path.write_text("\n".join(repeated) + "\n", encoding="utf-8")
-    debug(f"[{label}] {concat_path.name}: {len(bulletins)} bulletins | {len(repeated)} entries")
+    debug(f"[{label}] {concat_path.name}: {len(bulletins)-skipped} bulletins | {len(repeated)} entries")
     return concat_path
 
 
@@ -713,37 +756,38 @@ def _exit_reason(rc):
 #     if p2: monitor_ffmpeg(p2, "KurnoolTV")
 #     return p1, p2, bk, bn
 
+MIN_BULLETINS = 5
+
+def _with_fallback(folder, channel_name):
+    primary = get_all_bulletins(folder)
+    if len(primary) >= MIN_BULLETINS:
+        return primary
+    # Supplement with other channels' bulletins if we have some but not enough
+    if primary:
+        fallback = get_all_bulletins(_BASE)
+        seen, merged = set(), []
+        for f in primary + fallback:
+            if str(f) not in seen:
+                seen.add(str(f)); merged.append(f)
+        if merged:
+            return merged
+    # No content at all — play pre-encoded combined filler (intro+notebooklm) in a loop.
+    # Combined file is a single seamless MP4, so no concat-switching issues.
+    combined = _build_combined_filler(channel_name)
+    if combined:
+        debug(f"[{channel_name}] No bulletins — combined filler: {combined.name}")
+        return [combined]
+    intro = _get_intro_path(channel_name)
+    if intro:
+        debug(f"[{channel_name}] No bulletins — intro-only loop: {intro.name}")
+        return [intro]
+    if FILLER_FILE.exists():
+        debug(f"[{channel_name}] No intro found — filler loop")
+        return [FILLER_FILE]
+    return []
+
+
 def _launch_streams(inject_type=None, inject_payload=None):
-    MIN_BULLETINS = 5
-
-    def _with_fallback(folder, channel_name):
-        primary = get_all_bulletins(folder)
-        if len(primary) >= MIN_BULLETINS:
-            return primary
-        # Supplement with other channels' bulletins if we have some but not enough
-        if primary:
-            fallback = get_all_bulletins(_BASE)
-            seen, merged = set(), []
-            for f in primary + fallback:
-                if str(f) not in seen:
-                    seen.add(str(f)); merged.append(f)
-            if merged:
-                return merged
-        # No content at all — play pre-encoded combined filler (intro+notebooklm) in a loop.
-        # Combined file is a single seamless MP4, so no concat-switching issues.
-        combined = _build_combined_filler(channel_name)
-        if combined:
-            debug(f"[{channel_name}] No bulletins — combined filler: {combined.name}")
-            return [combined]
-        intro = _get_intro_path(channel_name)
-        if intro:
-            debug(f"[{channel_name}] No bulletins — intro-only loop: {intro.name}")
-            return [intro]
-        if FILLER_FILE.exists():
-            debug(f"[{channel_name}] No intro found — filler loop")
-            return [FILLER_FILE]
-        return []
-
     active = CHANNEL_DEFS[:STREAM_COUNT]
     procs  = []
     prepare_overlay()
@@ -836,9 +880,13 @@ def run_streamer():
                 # Crash recovery per channel
                 for i, (proc, ch) in enumerate(zip(procs, active)):
                     if proc and proc.poll() is not None:
-                        debug(f"{ch['label']} DOWN ({_exit_reason(proc.returncode)}) — restart in 3s")
+                        debug(f"{ch['label']} DOWN ({_exit_reason(proc.returncode)}) — rebuild concat + restart in 3s")
                         stream_down(ch["label"]); time.sleep(3)
-                        if (last_buls[i] or FILLER_FILE.exists()) and ch["stream_key"]:
+                        # Re-fetch and re-validate bulletins before rebuilding concat list
+                        fresh_buls = _with_fallback(ch["watch_dir"], ch["name"])
+                        last_buls[i] = fresh_buls
+                        if (fresh_buls or FILLER_FILE.exists()) and ch["stream_key"]:
+                            build_concat_list(fresh_buls, ch["concat"], ch["label"])
                             procs[i] = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"])
                             if procs[i]: monitor_ffmpeg(procs[i], ch["label"])
                         else:
