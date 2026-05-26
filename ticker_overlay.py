@@ -61,7 +61,8 @@ else:
     print("⚠️  [TICKER] Emoji font not found — emojis will render via Telugu font fallback")
 
 # ── Ticker config ─────────────────────────────────────────────────────────────
-TICKER_PNG_PATH = os.path.join(BASE_DIR, 'assets', 'ticker4.png')
+TICKER_PNG_PATH        = os.path.join(BASE_DIR, 'assets', 'ticker4.png')
+TICKER_LABELS_PNG_PATH = os.path.join(BASE_DIR, 'assets', 'ticker4_labels.png')
 ADS_FOLDER_PATH = os.path.join(BASE_DIR, 'assets', 'ads')
 METADATA_FILE   = os.path.join(BASE_OUTPUT_DIR, 'metadata.json')
 
@@ -90,13 +91,13 @@ TICKER_OVERLAY_Y = CONTENT_H       # 930
 
 HEADLINE_BAND_Y   = TICKER_OVERLAY_Y + 7
 HEADLINE_BAND_H   = 66
-HEADLINE_BAND_X   = 215
-HEADLINE_SCROLL_W = CONTENT_W - HEADLINE_BAND_X   # 1705
+HEADLINE_BAND_X   = 0               # strip starts at x=0; labels overlay covers diagonal left edge
+HEADLINE_SCROLL_W = CONTENT_W       # 1920 — full width; label sits on top hiding ~228px on left
 
 AD_BAND_Y         = TICKER_OVERLAY_Y + 80   # 1010 — bottom band starts at y=80 in ticker4.png
 AD_BAND_H         = 66
-AD_BAND_X         = 271
-AD_SCROLL_W       = CONTENT_W - AD_BAND_X   # 1649
+AD_BAND_X         = 0               # strip starts at x=0; labels overlay covers diagonal left edge
+AD_SCROLL_W       = CONTENT_W       # 1920 — full width; label sits on top hiding ~260px on left
 
 TICKER_START_T = float(INTRO_VIDEO_DURATION)
 
@@ -211,6 +212,51 @@ def _load_ad_texts() -> str:
 
     print(f"  ✅ [TICKER] {len(lines)} ad lines loaded")
     return f'  {AD_SEP}  '.join(lines)
+
+
+# ── Labels overlay ────────────────────────────────────────────────────────────
+
+def _prepare_labels_overlay() -> str:
+    """
+    ticker4.png se labels-only RGBA PNG banao.
+    Band areas (crimson + black pixels) → alpha=0 (transparent).
+    Label shapes (navy + terracotta parallelograms) → opaque rakhte hain.
+
+    Cached at TICKER_LABELS_PNG_PATH — rebuild only if ticker4.png is newer.
+    Returns path on success, '' on failure.
+    """
+    if not os.path.exists(TICKER_PNG_PATH):
+        print(f"  ⚠️  [TICKER] ticker4.png not found — labels overlay skipped")
+        return ''
+
+    if (os.path.exists(TICKER_LABELS_PNG_PATH) and
+            os.path.getmtime(TICKER_LABELS_PNG_PATH) >= os.path.getmtime(TICKER_PNG_PATH)):
+        print(f"  ✓ [TICKER] Labels overlay cached: {os.path.basename(TICKER_LABELS_PNG_PATH)}")
+        return TICKER_LABELS_PNG_PATH
+
+    try:
+        from PIL import Image
+        img = Image.open(TICKER_PNG_PATH).convert('RGBA')
+        pixels = img.load()
+        w, h = img.size
+
+        for y in range(h):
+            for x in range(w):
+                r, g, b, a = pixels[x, y]
+                # Crimson band (129,15,5): high R, very low G and B
+                is_crimson = r >= 100 and g <= 30 and b <= 20
+                # Black band (0,0,0): all channels near zero
+                is_black   = r <= 20 and g <= 20 and b <= 20
+                if is_crimson or is_black:
+                    pixels[x, y] = (r, g, b, 0)
+
+        img.save(TICKER_LABELS_PNG_PATH, 'PNG')
+        print(f"  ✓ [TICKER] Labels overlay created: {os.path.basename(TICKER_LABELS_PNG_PATH)} ({w}×{h})")
+        return TICKER_LABELS_PNG_PATH
+
+    except Exception as e:
+        print(f"  ⚠️  [TICKER] Labels overlay creation failed: {e}")
+        return ''
 
 
 # ── HTML builders ─────────────────────────────────────────────────────────────
@@ -519,6 +565,8 @@ def add_ticker_overlay(video_path: str, out_path: str,
     if not os.path.exists(TICKER_PNG_PATH):
         print(f"  ❌ ticker3.png not found: {TICKER_PNG_PATH}"); return False
 
+    labels_overlay_path = _prepare_labels_overlay()
+
     if ticker_text and ticker_text.strip():
         # Split on ★ separator (same separator used when building the string)
         raw = [h.strip() for h in ticker_text.replace('★', '\n').splitlines()]
@@ -582,11 +630,16 @@ def add_ticker_overlay(video_path: str, out_path: str,
         # Step 3: Single-pass FFmpeg — no splitting, no concat, no drift
         t0 = _time.time()
 
+        # Build filter_complex: strips go on first, then labels overlay on top
+        # to recreate the diagonal left edge from ticker4.png's parallelogram labels.
+        _labels_input_idx = 4 if labels_overlay_path else None
+
+        _ad_out = 'with_strips' if _labels_input_idx else 'tickered'
         fc = (
             # Full screen version (1920x1078, no black bar) — always
             f"[0:v]scale={CONTENT_W}:{OUTPUT_H}[full];"
 
-            # Ticker composite (930 + 148 black + ticker bands) — only ON ranges
+            # Ticker composite — only ON ranges
             f"[0:v]scale={CONTENT_W}:{CONTENT_H}[cnews];"
             f"[cnews]pad={CONTENT_W}:{OUTPUT_H}:0:0:black[padded];"
             f"[padded][1:v]overlay={TICKER_OVERLAY_X}:{TICKER_OVERLAY_Y}[ticker_base];"
@@ -594,9 +647,14 @@ def add_ticker_overlay(video_path: str, out_path: str,
             f"[2:v]crop={HEADLINE_SCROLL_W}:{HEADLINE_BAND_H}:mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_scroll];"
             f"[ticker_base][hl_scroll]overlay={HEADLINE_BAND_X}:{HEADLINE_BAND_Y}[after_hl];"
             f"[3:v]crop={AD_SCROLL_W}:{AD_BAND_H}:mod(t*{AD_SPEED}\\,{ad_w}):0[ad_scroll];"
-            f"[after_hl][ad_scroll]overlay={AD_BAND_X}:{AD_BAND_Y}[tickered];"
+            f"[after_hl][ad_scroll]overlay={AD_BAND_X}:{AD_BAND_Y}[{_ad_out}];" +
 
-            # Final: ticker ON → tickered version, ticker OFF → full screen version
+            # Labels on top: navy + terracotta parallelograms cover strip left edges
+            # giving natural diagonal boundary (transparent band areas let strips show through)
+            (f"[with_strips][{_labels_input_idx}:v]overlay=0:{TICKER_OVERLAY_Y}[tickered];"
+             if _labels_input_idx else "") +
+
+            # Final: ticker ON → tickered, ticker OFF → full screen
             f"[full][tickered]overlay=0:0:enable='{enable_expr}'[outv]"
         )
 
@@ -607,6 +665,10 @@ def add_ticker_overlay(video_path: str, out_path: str,
             '-loop', '1', '-i', TICKER_PNG_PATH,
             '-loop', '1', '-i', hl_strip_path,
             '-loop', '1', '-i', ad_strip_path,
+        ]
+        if labels_overlay_path:
+            cmd += ['-loop', '1', '-i', labels_overlay_path]
+        cmd += [
             '-filter_complex', fc,
             '-map', '[outv]', '-map', '0:a',
             '-c:v', VIDEO_CODEC, '-preset', PRESET, '-crf', str(CRF),
