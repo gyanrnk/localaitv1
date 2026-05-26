@@ -453,6 +453,27 @@ _STATIC_ASSETS = [
     'assets/intro4.mp4',
     'assets/Gidugu Regular.otf',
     'news_intro.mpeg',
+    # Location-specific intro videos
+    'assets/intro_karimnagar.mp4',
+    'assets/intro_tirupati.mp4',
+    'assets/intro_khammam.mp4',
+    'assets/intro_nalgonda.mp4',
+    'assets/intro_guntur.mp4',
+    'assets/intro_warangal.mp4',
+    'assets/intro_kakinada.mp4',
+    'assets/intro_nalore.mp4',
+    # Location-specific cap1 (break-news) videos
+    'assets/cap1_karimnagar.mp4',
+    'assets/cap1_tirupati.mp4',
+    'assets/cap1_kakinada.mp4',
+    'assets/cap1_nalore.mp4',
+    # NotebookLM filler videos
+    'assets/notebooklm_guntur.mp4',
+    'assets/notebooklm_nalgonda.mp4',
+    'assets/notebooklm_tirupati.mp4',
+    'assets/notebooklm_warangal.mp4',
+    'assets/notebooklm_kakinada.mp4',
+    'assets/notebooklm_nalore.mp4',
     # Fonts — downloaded only if Linux system fonts (fonts-noto) are not installed
     'NotoSansTelugu.ttf',
     'seguiemj.ttf',

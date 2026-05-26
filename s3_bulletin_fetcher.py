@@ -19,23 +19,43 @@ from config import (
 )
 
 
+import threading as _threading
+from botocore.config import Config as _BotoConfig
+
+_s3_lock   = _threading.Lock()
+_s3_lock_m = _threading.Lock()
+_s3_singleton   = None
+_s3_singleton_m = None
+
 def _s3_client():
-    """Own bucket client (ads, static assets, bulletins)."""
-    return boto3.client(
-        's3',
-        region_name=os.getenv('AWS_REGION', S3_REGION),
-        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-    )
+    """Own bucket — singleton client (thread-safe, pool size 25)."""
+    global _s3_singleton
+    if _s3_singleton is None:
+        with _s3_lock:
+            if _s3_singleton is None:
+                _s3_singleton = boto3.client(
+                    's3',
+                    region_name=os.getenv('AWS_REGION', S3_REGION),
+                    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+                    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+                    config=_BotoConfig(max_pool_connections=25),
+                )
+    return _s3_singleton
 
 def _s3_client_m():
-    """Meghna's bucket client (whoiswho, vege, trainroutes)."""
-    return boto3.client(
-        's3',
-        region_name=S3_REGION,
-        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID_M'),
-        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY_M'),
-    )
+    """Meghna's bucket — singleton client (thread-safe, pool size 25)."""
+    global _s3_singleton_m
+    if _s3_singleton_m is None:
+        with _s3_lock_m:
+            if _s3_singleton_m is None:
+                _s3_singleton_m = boto3.client(
+                    's3',
+                    region_name=S3_REGION,
+                    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID_M'),
+                    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY_M'),
+                    config=_BotoConfig(max_pool_connections=25),
+                )
+    return _s3_singleton_m
 
 
 def list_s3_bulletins() -> list:

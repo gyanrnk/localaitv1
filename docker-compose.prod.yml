@@ -60,6 +60,7 @@ services:
       - BGM_ENABLED=${BGM_ENABLED:-true}
     volumes:
       # Local storage
+      - ./assets:/app/assets
       - ./inputs:/app/inputs
       - ./outputs:/app/outputs
       # Static assets

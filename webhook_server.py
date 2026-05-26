@@ -815,46 +815,41 @@ def _run_planner():
         #         _headlines.append(h)
         # ticker_text = '   ★   '.join(_headlines) if _headlines else "తాజా వార్తల కోసం చూస్తూ ఉండండి"
 
-        # ── Ticker text: directly from DB (load_metadata is commented out) ───
+        # ── Shared DB headlines: fetched once, used by all locations ─────────
+        # Each location's ticker_text is built inside the loop (manifest items
+        # first, then DB headlines as supplement — guarantees non-empty ticker).
         from datetime import datetime, timedelta, timezone
         import db as _db
 
-        _cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        _db_headlines = []
         try:
             _all_meta = _db.fetchall(
                 "SELECT headline, timestamp FROM news_items "
                 "WHERE timestamp::timestamptz >= NOW() - INTERVAL '24 hours' "
                 "ORDER BY counter ASC"
             )
+            _seen_db = set()
+            for item in _all_meta:
+                h = (item.get('headline') or '').strip()
+                if h and h not in _seen_db:
+                    _seen_db.add(h)
+                    _db_headlines.append(h)
         except Exception as _e:
             logger.warning(f"⚠️ [TICKER] DB fetch failed: {_e}")
-            _all_meta = []
 
-        seen = set()
-        _headlines = []
-        for item in _all_meta:
-            h = (item.get('headline') or '').strip()
-            if not h or h in seen:
-                continue
-            seen.add(h)
-            _headlines.append(h)
-
-        # Fallback: if 24hr window empty, grab latest available
-        if not _headlines:
+        # Fallback: if 24hr window empty, grab latest 50
+        if not _db_headlines:
             try:
-                _all_meta = _db.fetchall(
+                _seen_db2 = set()
+                for item in _db.fetchall(
                     "SELECT headline FROM news_items ORDER BY counter DESC LIMIT 50"
-                )
-                for item in _all_meta:
+                ):
                     h = (item.get('headline') or '').strip()
-                    if h and h not in seen:
-                        seen.add(h)
-                        _headlines.append(h)
+                    if h and h not in _seen_db2:
+                        _seen_db2.add(h)
+                        _db_headlines.append(h)
             except Exception:
                 pass
-
-        ticker_text = '   ★   '.join(_headlines) if _headlines else "తాజా వార్తల కోసం చూస్తూ ఉండండి"
-        # ─────────────────────────────────────────────────────────────────────
         # ─────────────────────────────────────────────────────────────────────
 
 
@@ -907,24 +902,52 @@ def _run_planner():
             logo_path    = get_channel_logo_path(channel_name, _base)
             logger.info(f"Intro: {os.path.basename(intro_path)} | Logo: {os.path.basename(logo_path)} | channel='{channel_name}'")
 
+            # ── Ticker text: this bulletin's own headlines first, then DB ──────
+            # This guarantees a non-empty ticker even if DB query failed.
+            _loc_seen = set()
+            _loc_headlines = []
+            for _it in items:
+                if _it.get('type') != 'news':
+                    continue
+                h = (_it.get('headline') or '').strip()
+                if h and h not in _loc_seen:
+                    _loc_seen.add(h)
+                    _loc_headlines.append(h)
+            # Supplement with DB headlines from all locations
+            for h in _db_headlines:
+                if h not in _loc_seen:
+                    _loc_seen.add(h)
+                    _loc_headlines.append(h)
+
+            ticker_text = ('   ★   '.join(_loc_headlines)
+                           if _loc_headlines else "తాజా వార్తల కోసం చూస్తూ ఉండండి")
+            _bulletin_hl_count = sum(
+                1 for _it in items
+                if (_it.get('type') == 'news') and (_it.get('headline') or '').strip()
+            )
+            logger.info(f"📰 [TICKER] {channel_name}: {len(_loc_headlines)} total headlines "
+                        f"({_bulletin_hl_count} from bulletin, {len(_db_headlines)} from DB)")
+
             _build_done = threading.Event()
             _build_result = {'video_path': None, 'error': None}
 
-            def _build_video_bg():
-                logger.info(f"🔨 [BUILD-THREAD] Starting: {os.path.basename(bulletin_dir)}")
+            def _build_video_bg(_tt=ticker_text, _cn=channel_name,
+                               _bd=bulletin_dir, _lp=logo_path, _ip=intro_path,
+                               _sd=segments_dir):
+                logger.info(f"🔨 [BUILD-THREAD] Starting: {os.path.basename(_bd)}")
                 try:
                     # ── Stale markers ko BUILD THREAD ke andar clean karo ──
                     import glob as _glob
-                    for _stale in _glob.glob(os.path.join(segments_dir, 'item_*_ready.json')):
+                    for _stale in _glob.glob(os.path.join(_sd, 'item_*_ready.json')):
                         try:
                             os.remove(_stale)
                             logger.info(f"🧹 Stale marker removed: {os.path.basename(_stale)}")
                         except Exception:
                             pass
                     # ─────────────────────────────────────────────────────
-                    vp = queue_bulletin_build(bulletin_dir, logo_path, intro_path,
-                                              ticker_text=ticker_text,
-                                              channel_name=channel_name)
+                    vp = queue_bulletin_build(_bd, _lp, _ip,
+                                              ticker_text=_tt,
+                                              channel_name=_cn)
 
                     _build_result['video_path'] = vp
                     logger.info(f"🔨 [BUILD-THREAD] Done → {vp}")
