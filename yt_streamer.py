@@ -287,7 +287,7 @@ def _is_valid_mp4(path: Path, min_size: int = 100_000) -> bool:
              "-show_entries", "stream=codec_type:format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1",
              str(path)],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=60
         )
         if r.returncode != 0:
             return False
