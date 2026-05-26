@@ -57,3 +57,17 @@ temp/
 
 # Cache
 .cache
+
+# ── Runtime-generated media (largest culprits — never needed in image) ────────
+# outputs/ = all generated bulletin videos, audio segments, item caches (~20-25 GB)
+# inputs/  = raw reporter-uploaded video files (~2-5 GB)
+outputs/
+inputs/
+
+# s3_upload staging folder
+s3_upload/
+
+# NOTE: assets/ is intentionally NOT excluded here.
+# Location-specific intro/cap1/notebooklm videos live in assets/ and are NOT
+# auto-downloaded by ensure_assets() — they must be present in the image.
+# If you want to exclude them, first add them to _STATIC_ASSETS in config.py.
