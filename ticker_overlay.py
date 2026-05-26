@@ -222,13 +222,15 @@ def _prepare_labels_overlay() -> str:
     Band areas (crimson + black pixels) → alpha=0 (transparent).
     Label shapes (navy + terracotta parallelograms) → opaque rakhte hain.
 
-    Cached at TICKER_LABELS_PNG_PATH — rebuild only if ticker4.png is newer.
+    Pehle assets/ mein cache karne ki koshish karta hai;
+    write fail ho to temp file use karta hai.
     Returns path on success, '' on failure.
     """
     if not os.path.exists(TICKER_PNG_PATH):
         print(f"  ⚠️  [TICKER] ticker4.png not found — labels overlay skipped")
         return ''
 
+    # Cache check (assets/ mein)
     if (os.path.exists(TICKER_LABELS_PNG_PATH) and
             os.path.getmtime(TICKER_LABELS_PNG_PATH) >= os.path.getmtime(TICKER_PNG_PATH)):
         print(f"  ✓ [TICKER] Labels overlay cached: {os.path.basename(TICKER_LABELS_PNG_PATH)}")
@@ -239,23 +241,43 @@ def _prepare_labels_overlay() -> str:
         img = Image.open(TICKER_PNG_PATH).convert('RGBA')
         pixels = img.load()
         w, h = img.size
+        opaque_kept = 0
 
         for y in range(h):
             for x in range(w):
                 r, g, b, a = pixels[x, y]
                 # Crimson band (129,15,5): high R, very low G and B
-                is_crimson = r >= 100 and g <= 30 and b <= 20
+                is_crimson = r >= 100 and g <= 35 and b <= 25
                 # Black band (0,0,0): all channels near zero
                 is_black   = r <= 20 and g <= 20 and b <= 20
                 if is_crimson or is_black:
                     pixels[x, y] = (r, g, b, 0)
+                else:
+                    opaque_kept += 1
 
-        img.save(TICKER_LABELS_PNG_PATH, 'PNG')
-        print(f"  ✓ [TICKER] Labels overlay created: {os.path.basename(TICKER_LABELS_PNG_PATH)} ({w}×{h})")
-        return TICKER_LABELS_PNG_PATH
+        print(f"  ✓ [TICKER] Labels overlay: {opaque_kept} opaque pixels kept out of {w*h}")
+        if opaque_kept < 100:
+            print(f"  ⚠️  [TICKER] Labels overlay looks all-transparent — check ticker4.png pixel colors")
+            return ''
+
+        # Try writing to assets/ first; fall back to temp file
+        out_path = TICKER_LABELS_PNG_PATH
+        try:
+            img.save(out_path, 'PNG')
+            print(f"  ✓ [TICKER] Labels overlay saved: {os.path.basename(out_path)}")
+        except Exception as write_err:
+            print(f"  ⚠️  [TICKER] Cannot write to assets/ ({write_err}) — using temp file")
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='_ticker4_labels.png')
+            tmp.close()
+            out_path = tmp.name
+            img.save(out_path, 'PNG')
+            print(f"  ✓ [TICKER] Labels overlay saved to temp: {out_path}")
+
+        return out_path
 
     except Exception as e:
         print(f"  ⚠️  [TICKER] Labels overlay creation failed: {e}")
+        import traceback; traceback.print_exc()
         return ''
 
 
@@ -630,11 +652,16 @@ def add_ticker_overlay(video_path: str, out_path: str,
         # Step 3: Single-pass FFmpeg — no splitting, no concat, no drift
         t0 = _time.time()
 
-        # Build filter_complex: strips go on first, then labels overlay on top
-        # to recreate the diagonal left edge from ticker4.png's parallelogram labels.
+        # Build filter_complex.
+        # With labels overlay: strips at x=0 (full width), labels PNG on top → diagonal edge.
+        # Without labels overlay: strips at rectangular fallback positions (safe, no label covered).
         _labels_input_idx = 4 if labels_overlay_path else None
+        _hl_bx  = HEADLINE_BAND_X  if _labels_input_idx else 230
+        _hl_sw  = HEADLINE_SCROLL_W if _labels_input_idx else (CONTENT_W - 230)
+        _ad_bx  = AD_BAND_X         if _labels_input_idx else 271
+        _ad_sw  = AD_SCROLL_W       if _labels_input_idx else (CONTENT_W - 271)
+        _ad_out = 'with_strips'     if _labels_input_idx else 'tickered'
 
-        _ad_out = 'with_strips' if _labels_input_idx else 'tickered'
         fc = (
             # Full screen version (1920x1078, no black bar) — always
             f"[0:v]scale={CONTENT_W}:{OUTPUT_H}[full];"
@@ -644,13 +671,14 @@ def add_ticker_overlay(video_path: str, out_path: str,
             f"[cnews]pad={CONTENT_W}:{OUTPUT_H}:0:0:black[padded];"
             f"[padded][1:v]overlay={TICKER_OVERLAY_X}:{TICKER_OVERLAY_Y}[ticker_base];"
 
-            f"[2:v]crop={HEADLINE_SCROLL_W}:{HEADLINE_BAND_H}:mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_scroll];"
-            f"[ticker_base][hl_scroll]overlay={HEADLINE_BAND_X}:{HEADLINE_BAND_Y}[after_hl];"
-            f"[3:v]crop={AD_SCROLL_W}:{AD_BAND_H}:mod(t*{AD_SPEED}\\,{ad_w}):0[ad_scroll];"
-            f"[after_hl][ad_scroll]overlay={AD_BAND_X}:{AD_BAND_Y}[{_ad_out}];" +
+            f"[2:v]crop={_hl_sw}:{HEADLINE_BAND_H}:mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_scroll];"
+            f"[ticker_base][hl_scroll]overlay={_hl_bx}:{HEADLINE_BAND_Y}[after_hl];"
+            f"[3:v]crop={_ad_sw}:{AD_BAND_H}:mod(t*{AD_SPEED}\\,{ad_w}):0[ad_scroll];"
+            f"[after_hl][ad_scroll]overlay={_ad_bx}:{AD_BAND_Y}[{_ad_out}];" +
 
             # Labels on top: navy + terracotta parallelograms cover strip left edges
-            # giving natural diagonal boundary (transparent band areas let strips show through)
+            # giving natural diagonal boundary (transparent band areas let strips show through).
+            # Skipped when labels PNG unavailable — rectangular strips used instead.
             (f"[with_strips][{_labels_input_idx}:v]overlay=0:{TICKER_OVERLAY_Y}[tickered];"
              if _labels_input_idx else "") +
 
