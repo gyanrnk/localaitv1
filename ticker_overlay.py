@@ -93,8 +93,8 @@ HEADLINE_BAND_H   = 66
 HEADLINE_BAND_X   = 215
 HEADLINE_SCROLL_W = CONTENT_W - HEADLINE_BAND_X   # 1705
 
-AD_BAND_Y         = TICKER_OVERLAY_Y + 74   # 997
-AD_BAND_H         = 81
+AD_BAND_Y         = TICKER_OVERLAY_Y + 80   # 1010 — bottom band starts at y=80 in ticker4.png
+AD_BAND_H         = 66
 AD_BAND_X         = 271
 AD_SCROLL_W       = CONTENT_W - AD_BAND_X   # 1649
 
