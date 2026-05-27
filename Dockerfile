@@ -23,10 +23,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime dependencies including FFmpeg
+# Install runtime dependencies including FFmpeg + Telugu fonts
 RUN apt-get update && apt-get install -y \
     libpq5 \
     ffmpeg \
+    fonts-noto-core \
+    fonts-noto-ui-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder

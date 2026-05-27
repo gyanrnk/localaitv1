@@ -313,8 +313,14 @@ def _build_headline_html(headlines: list, font_size: int,
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
 {font_face}
-* {{margin:0;padding:0;box-sizing:border-box;}}
+* {{margin:0;padding:0;}}
 html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});overflow:hidden;}}
+.bg-fill {{
+    position:fixed;top:0;left:0;
+    width:100vw;height:100vh;
+    background:rgb({bg_r},{bg_g},{bg_b});
+    z-index:-1;
+}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
@@ -323,10 +329,10 @@ html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b
     white-space:nowrap; line-height:{band_h}px;
     padding-left:10px;
     display:flex; align-items:center;
-    width:{est_w}px; height:{band_h}px;
+    position:relative;z-index:1;
 }}
 </style>
-</head><body><div class="t">{full_content}</div></body></html>"""
+</head><body><div class="bg-fill"></div><div class="t">{full_content}</div></body></html>"""
 
 
 def _build_ad_html(ad_text: str, font_size: int,
@@ -350,8 +356,14 @@ def _build_ad_html(ad_text: str, font_size: int,
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
 {font_face}
-* {{margin:0;padding:0;box-sizing:border-box;}}
+* {{margin:0;padding:0;}}
 html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});overflow:hidden;}}
+.bg-fill {{
+    position:fixed;top:0;left:0;
+    width:100vw;height:100vh;
+    background:rgb({bg_r},{bg_g},{bg_b});
+    z-index:-1;
+}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
@@ -359,10 +371,10 @@ html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b
     background:rgb({bg_r},{bg_g},{bg_b});
     white-space:nowrap; line-height:{band_h}px;
     padding-left:10px;
-    width:{est_w}px; height:{band_h}px;
+    position:relative;z-index:1;
 }}
 </style>
-</head><body><div class="t">{full_content}</div></body></html>"""
+</head><body><div class="bg-fill"></div><div class="t">{full_content}</div></body></html>"""
 
 
 # ── Strip renderer ────────────────────────────────────────────────────────────
