@@ -686,7 +686,7 @@ def _send_bulletin_to_api(bulletin_dir: str, video_url: str, manifest: dict):
         "timestamp":      _trim_timestamp(manifest.get("created_at", "")),
         "priority_level": "low",
         "expiry_time":    None,
-        "location_id":    str(loc_id),
+        "location_id":    int(loc_id) if loc_id else 0,
         "image_url":      _get_bulletin_thumbnail(items, manifest),  ## changed-08-04-15-43
         "audio_url":      None,
         "video_url":      video_url,  # ← bulletin final video
