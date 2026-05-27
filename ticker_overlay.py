@@ -313,15 +313,17 @@ def _build_headline_html(headlines: list, font_size: int,
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
 {font_face}
-* {{margin:0;padding:0;}}
-html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});}}
+* {{margin:0;padding:0;box-sizing:border-box;}}
+html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});overflow:hidden;}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
     color:rgb({r},{g},{b});
+    background:rgb({bg_r},{bg_g},{bg_b});
     white-space:nowrap; line-height:{band_h}px;
     padding-left:10px;
     display:flex; align-items:center;
+    width:{est_w}px; height:{band_h}px;
 }}
 </style>
 </head><body><div class="t">{full_content}</div></body></html>"""
@@ -348,14 +350,16 @@ def _build_ad_html(ad_text: str, font_size: int,
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
 {font_face}
-* {{margin:0;padding:0;}}
-html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});}}
+* {{margin:0;padding:0;box-sizing:border-box;}}
+html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});overflow:hidden;}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
     color:rgb({r},{g},{b});
+    background:rgb({bg_r},{bg_g},{bg_b});
     white-space:nowrap; line-height:{band_h}px;
     padding-left:10px;
+    width:{est_w}px; height:{band_h}px;
 }}
 </style>
 </head><body><div class="t">{full_content}</div></body></html>"""
