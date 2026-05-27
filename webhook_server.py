@@ -655,8 +655,12 @@ def _send_bulletin_to_api(bulletin_dir: str, video_url: str, manifest: dict):
     headers = {"Authorization": f"Bearer {BULLETIN_API_TOKEN}",
                "Content-Type": "application/json"}
 
-    items     = manifest.get('items', [])
-    loc_name  = items[0].get('location_name', '') if items else ''
+    items        = manifest.get('items', [])
+    _news_items  = [i for i in items if i.get('type') == 'news']
+    _first_news  = _news_items[0] if _news_items else (items[0] if items else {})
+    loc_name     = _first_news.get('location_name', '')
+    loc_id       = _first_news.get('location_id', 0) or 0
+
     # created   = manifest.get('created_at', '')[:10]
     # title     = f"{loc_name} News Bulletin {created}".strip() if loc_name else 'News Bulletin'
     IST = pytz.timezone("Asia/Kolkata")
@@ -668,7 +672,7 @@ def _send_bulletin_to_api(bulletin_dir: str, video_url: str, manifest: dict):
 
     # ✅ Only starting time
     start_time = start_dt.strftime('%I:%M %p').lstrip('0')
-    location_en = manifest.get('location_name') or (items[0].get('location_name', '') if items else '')
+    location_en = manifest.get('location_name') or loc_name
     location_en = location_en.split(',')[0].strip() or 'News'
     from openai_handler import get_llm_handler
     location_te = get_llm_handler(location_en).translate_to_telugu(location_en) if location_en else 'వార్త'
@@ -679,9 +683,10 @@ def _send_bulletin_to_api(bulletin_dir: str, video_url: str, manifest: dict):
     payload = {
         "title":          title,
         "content":        f"{manifest.get('item_count', 0)} news items",
-        "timestamp": _trim_timestamp(manifest.get("created_at", "")),
+        "timestamp":      _trim_timestamp(manifest.get("created_at", "")),
         "priority_level": "low",
         "expiry_time":    None,
+        "location_id":    str(loc_id),
         "image_url":      _get_bulletin_thumbnail(items, manifest),  ## changed-08-04-15-43
         "audio_url":      None,
         "video_url":      video_url,  # ← bulletin final video
