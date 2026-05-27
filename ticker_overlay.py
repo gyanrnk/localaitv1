@@ -287,7 +287,6 @@ def _build_headline_html(headlines: list, font_size: int,
                           color: tuple, band_h: int,
                           est_w: int, repeats: int) -> str:
     r, g, b, _ = color
-    bg_r, bg_g, bg_b = HEADLINE_BG
 
     font_face = ""
     if TELUGU_FONT and os.path.exists(TELUGU_FONT):
@@ -314,32 +313,24 @@ def _build_headline_html(headlines: list, font_size: int,
 <style>
 {font_face}
 * {{margin:0;padding:0;}}
-html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});overflow:hidden;}}
-.bg-fill {{
-    position:fixed;top:0;left:0;
-    width:100vw;height:100vh;
-    background:rgb({bg_r},{bg_g},{bg_b});
-    z-index:-1;
-}}
+html,body {{width:{est_w}px;height:{band_h}px;background:transparent;overflow:hidden;}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
     color:rgb({r},{g},{b});
-    background:rgb({bg_r},{bg_g},{bg_b});
     white-space:nowrap; line-height:{band_h}px;
     padding-left:10px;
     display:flex; align-items:center;
     position:relative;z-index:1;
 }}
 </style>
-</head><body><div class="bg-fill"></div><div class="t">{full_content}</div></body></html>"""
+</head><body><div class="t">{full_content}</div></body></html>"""
 
 
 def _build_ad_html(ad_text: str, font_size: int,
                    color: tuple, band_h: int,
                    est_w: int, repeats: int) -> str:
     r, g, b, _ = color
-    bg_r, bg_g, bg_b = AD_BG
 
     font_face = ""
     if TELUGU_FONT and os.path.exists(TELUGU_FONT):
@@ -357,24 +348,17 @@ def _build_ad_html(ad_text: str, font_size: int,
 <style>
 {font_face}
 * {{margin:0;padding:0;}}
-html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});overflow:hidden;}}
-.bg-fill {{
-    position:fixed;top:0;left:0;
-    width:100vw;height:100vh;
-    background:rgb({bg_r},{bg_g},{bg_b});
-    z-index:-1;
-}}
+html,body {{width:{est_w}px;height:{band_h}px;background:transparent;overflow:hidden;}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
     color:rgb({r},{g},{b});
-    background:rgb({bg_r},{bg_g},{bg_b});
     white-space:nowrap; line-height:{band_h}px;
     padding-left:10px;
     position:relative;z-index:1;
 }}
 </style>
-</head><body><div class="bg-fill"></div><div class="t">{full_content}</div></body></html>"""
+</head><body><div class="t">{full_content}</div></body></html>"""
 
 
 # ── Strip renderer ────────────────────────────────────────────────────────────
@@ -428,7 +412,7 @@ def _render_strip(browser, html: str, band_h: int, out_path: str,
         page = browser.new_page(viewport={"width": tile_w, "height": band_h})
         page.goto(html_uri, wait_until="networkidle")
         page.evaluate("() => document.fonts.ready")
-        page.screenshot(path=tmp_png_path)
+        page.screenshot(path=tmp_png_path, omit_background=True)
         page.close()
 
         img = Image.open(tmp_png_path).convert('RGBA')
