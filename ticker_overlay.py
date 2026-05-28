@@ -287,6 +287,7 @@ def _build_headline_html(headlines: list, font_size: int,
                           color: tuple, band_h: int,
                           est_w: int, repeats: int) -> str:
     r, g, b, _ = color
+    bg_r, bg_g, bg_b = HEADLINE_BG[:3]
 
     font_face = ""
     if TELUGU_FONT and os.path.exists(TELUGU_FONT):
@@ -313,7 +314,7 @@ def _build_headline_html(headlines: list, font_size: int,
 <style>
 {font_face}
 * {{margin:0;padding:0;}}
-html,body {{width:{est_w}px;height:{band_h}px;background:#00ff00;overflow:hidden;}}
+html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});overflow:hidden;}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
@@ -331,6 +332,7 @@ def _build_ad_html(ad_text: str, font_size: int,
                    color: tuple, band_h: int,
                    est_w: int, repeats: int) -> str:
     r, g, b, _ = color
+    bg_r, bg_g, bg_b = AD_BG[:3]
 
     font_face = ""
     if TELUGU_FONT and os.path.exists(TELUGU_FONT):
@@ -348,7 +350,7 @@ def _build_ad_html(ad_text: str, font_size: int,
 <style>
 {font_face}
 * {{margin:0;padding:0;}}
-html,body {{width:{est_w}px;height:{band_h}px;background:#00ff00;overflow:hidden;}}
+html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});overflow:hidden;}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
@@ -519,13 +521,11 @@ def _apply_ticker_to_clip(src: str, out: str,
         f"[padded][1:v]overlay={TICKER_OVERLAY_X}:{TICKER_OVERLAY_Y}[ticker_base];"
 
         f"[2:v]crop={HEADLINE_SCROLL_W}:{HEADLINE_BAND_H}:"
-        f"mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_raw];"
-        f"[hl_raw]chromakey=0x00ff00:0.05:0.1[hl_scroll];"
+        f"mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_scroll];"
         f"[ticker_base][hl_scroll]overlay={HEADLINE_BAND_X}:{HEADLINE_BAND_Y}[after_hl];"
 
         f"[3:v]crop={AD_SCROLL_W}:{AD_BAND_H}:"
-        f"mod(t*{AD_SPEED}\\,{ad_w}):0[ad_raw];"
-        f"[ad_raw]chromakey=0x00ff00:0.05:0.1[ad_scroll];"
+        f"mod(t*{AD_SPEED}\\,{ad_w}):0[ad_scroll];"
         f"[after_hl][ad_scroll]overlay={AD_BAND_X}:{AD_BAND_Y}[outv]"
     )
 
@@ -673,11 +673,9 @@ def add_ticker_overlay(video_path: str, out_path: str,
             f"[cnews]pad={CONTENT_W}:{OUTPUT_H}:0:0:black[padded];"
             f"[padded][1:v]overlay={TICKER_OVERLAY_X}:{TICKER_OVERLAY_Y}[ticker_base];"
 
-            f"[2:v]crop={_hl_sw}:{HEADLINE_BAND_H}:mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_raw];"
-            f"[hl_raw]chromakey=0x00ff00:0.05:0.1[hl_scroll];"
+            f"[2:v]crop={_hl_sw}:{HEADLINE_BAND_H}:mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_scroll];"
             f"[ticker_base][hl_scroll]overlay={_hl_bx}:{HEADLINE_BAND_Y}[after_hl];"
-            f"[3:v]crop={_ad_sw}:{AD_BAND_H}:mod(t*{AD_SPEED}\\,{ad_w}):0[ad_raw];"
-            f"[ad_raw]chromakey=0x00ff00:0.05:0.1[ad_scroll];"
+            f"[3:v]crop={_ad_sw}:{AD_BAND_H}:mod(t*{AD_SPEED}\\,{ad_w}):0[ad_scroll];"
             f"[after_hl][ad_scroll]overlay={_ad_bx}:{AD_BAND_Y}[{_ad_out}];" +
 
             # Labels on top: navy + terracotta parallelograms cover strip left edges
