@@ -313,7 +313,7 @@ def _build_headline_html(headlines: list, font_size: int,
 <style>
 {font_face}
 * {{margin:0;padding:0;}}
-html,body {{width:{est_w}px;height:{band_h}px;background:transparent;overflow:hidden;}}
+html,body {{width:{est_w}px;height:{band_h}px;background:#00ff00;overflow:hidden;}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
@@ -348,7 +348,7 @@ def _build_ad_html(ad_text: str, font_size: int,
 <style>
 {font_face}
 * {{margin:0;padding:0;}}
-html,body {{width:{est_w}px;height:{band_h}px;background:transparent;overflow:hidden;}}
+html,body {{width:{est_w}px;height:{band_h}px;background:#00ff00;overflow:hidden;}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
@@ -412,7 +412,7 @@ def _render_strip(browser, html: str, band_h: int, out_path: str,
         page = browser.new_page(viewport={"width": tile_w, "height": band_h})
         page.goto(html_uri, wait_until="networkidle")
         page.evaluate("() => document.fonts.ready")
-        page.screenshot(path=tmp_png_path, omit_background=True)
+        page.screenshot(path=tmp_png_path)
         page.close()
 
         img = Image.open(tmp_png_path).convert('RGBA')
@@ -519,11 +519,13 @@ def _apply_ticker_to_clip(src: str, out: str,
         f"[padded][1:v]overlay={TICKER_OVERLAY_X}:{TICKER_OVERLAY_Y}[ticker_base];"
 
         f"[2:v]crop={HEADLINE_SCROLL_W}:{HEADLINE_BAND_H}:"
-        f"mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_scroll];"
+        f"mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_raw];"
+        f"[hl_raw]chromakey=0x00ff00:0.05:0.1[hl_scroll];"
         f"[ticker_base][hl_scroll]overlay={HEADLINE_BAND_X}:{HEADLINE_BAND_Y}[after_hl];"
 
         f"[3:v]crop={AD_SCROLL_W}:{AD_BAND_H}:"
-        f"mod(t*{AD_SPEED}\\,{ad_w}):0[ad_scroll];"
+        f"mod(t*{AD_SPEED}\\,{ad_w}):0[ad_raw];"
+        f"[ad_raw]chromakey=0x00ff00:0.05:0.1[ad_scroll];"
         f"[after_hl][ad_scroll]overlay={AD_BAND_X}:{AD_BAND_Y}[outv]"
     )
 
@@ -671,9 +673,11 @@ def add_ticker_overlay(video_path: str, out_path: str,
             f"[cnews]pad={CONTENT_W}:{OUTPUT_H}:0:0:black[padded];"
             f"[padded][1:v]overlay={TICKER_OVERLAY_X}:{TICKER_OVERLAY_Y}[ticker_base];"
 
-            f"[2:v]crop={_hl_sw}:{HEADLINE_BAND_H}:mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_scroll];"
+            f"[2:v]crop={_hl_sw}:{HEADLINE_BAND_H}:mod(t*{HEADLINE_SPEED}\\,{hl_w}):0[hl_raw];"
+            f"[hl_raw]chromakey=0x00ff00:0.05:0.1[hl_scroll];"
             f"[ticker_base][hl_scroll]overlay={_hl_bx}:{HEADLINE_BAND_Y}[after_hl];"
-            f"[3:v]crop={_ad_sw}:{AD_BAND_H}:mod(t*{AD_SPEED}\\,{ad_w}):0[ad_scroll];"
+            f"[3:v]crop={_ad_sw}:{AD_BAND_H}:mod(t*{AD_SPEED}\\,{ad_w}):0[ad_raw];"
+            f"[ad_raw]chromakey=0x00ff00:0.05:0.1[ad_scroll];"
             f"[after_hl][ad_scroll]overlay={_ad_bx}:{AD_BAND_Y}[{_ad_out}];" +
 
             # Labels on top: navy + terracotta parallelograms cover strip left edges
