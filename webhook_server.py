@@ -674,8 +674,12 @@ def _send_bulletin_to_api(bulletin_dir: str, video_url: str, manifest: dict):
     start_time = start_dt.strftime('%I:%M %p').lstrip('0')
     location_en = manifest.get('location_name') or loc_name
     location_en = location_en.split(',')[0].strip() or 'News'
+    from config import LOCATION_TELUGU_MAP
     from openai_handler import get_llm_handler
-    location_te = get_llm_handler(location_en).translate_to_telugu(location_en) if location_en else 'వార్త'
+    _loc_key = location_en.lower().strip()
+    location_te = LOCATION_TELUGU_MAP.get(_loc_key) or (
+        get_llm_handler(location_en).translate_to_telugu(location_en) if location_en else 'వార్త'
+    )
 
     title = f"{location_te} వార్త బులెటిన్స్ | 🕒 {start_time}"
 

@@ -126,7 +126,7 @@ SUPPORTED_VIDEO_FORMATS = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
 SUPPORTED_AUDIO_FORMATS = ['.mp3', '.wav', '.m4a', '.ogg']
 
 INTRO_VIDEO_DURATION       = 27
-HEADLINE_DURATION_PER_ITEM = 4
+HEADLINE_DURATION_PER_ITEM = 6
 ADDRESS_GIF_PATH = os.path.join(BASE_DIR, 'assets', 'address.gif')  # path adjust karo
 REPORTER_DURATION = 5 
 API_BASE_URL = "https://srv1264596.hstgr.cloud"
@@ -200,20 +200,25 @@ REMEMBER: You are creating content for a news anchor on live television. Every w
 
 LANGUAGE ENFORCEMENT: Input may arrive in Urdu, Hindi, English, or any other language. You MUST translate and rewrite it entirely into Telugu. Output must contain ONLY Telugu script (తెలుగు లిపి). Zero tolerance for Urdu, Hindi, Arabic, or English words in the output."""
 
-TELUGU_HEADLINE_PROMPT = f"""You are an expert Telugu news headline writer.
+TELUGU_HEADLINE_PROMPT = f"""You are an expert Telugu news headline writer for broadcast TV.
 
 REQUIREMENTS:
-1. LENGTH: Maximum 4-5 words maximum 2 lines
+1. LENGTH: 6-10 words — complete, meaningful sentence
 2. DURATION: Must fit in {HEADLINE_DURATION_PER_ITEM} seconds when spoken
-3. STYLE: Past tense, action-first (ఏం జరిగింది format)
-4. CONTENT: Most important single fact — person + action or place + event
-5. LANGUAGE: Pure Telugu, no English mixing, no verbs ending in -తుంది/-స్తుంది
-6. AVOID: Questions, exclamation marks, conjunctions, filler words
+3. STYLE: Complete sentence with verb — tells WHO did WHAT or WHAT happened WHERE
+4. CONTENT: Most important fact — specific, not vague
+5. LANGUAGE: Pure Telugu, no English mixing
+6. AVOID: Questions, exclamation marks, filler words, cutting sentence mid-way
 
 GOOD EXAMPLES:
-  చెన్నైలో తుఫాను దెబ్బ
-  భారత సైన్యం విజయం
-  డావోస్‌లో మోదీ ప్రసంగం
+  వేములవాడలో సమ్మె విజయవంతంగా ముగిసింది
+  కరీంనగర్‌లో భారీ వర్షాలకు పంటలు దెబ్బతిన్నాయి
+  రాష్ట్ర ప్రభుత్వం కొత్త పథకాన్ని ప్రకటించింది
+  మున్సిపల్ సమావేశంలో కీలక తీర్మానాలు ఆమోదించారు
+
+BAD EXAMPLES (too short/incomplete):
+  వేములవాడ సమ్మెకు   ← incomplete
+  భారత సైన్యం విజయం  ← vague, no context
 
 OUTPUT: Headline only — nothing else."""
 
@@ -360,6 +365,54 @@ LOCATION_MAP = {
     "hitech city":       41,
     "jubilee hills":     41,   # nearby areas bhi Madhapur bulletin mein chahiye toh
     "film nagar":        41,
+}
+
+# Static English → Telugu name map for bulletin titles (avoids LLM call for known cities)
+LOCATION_TELUGU_MAP = {
+    "hyderabad":     "హైదరాబాద్",
+    "warangal":      "వరంగల్",
+    "nizamabad":     "నిజామాబాద్",
+    "khammam":       "ఖమ్మం",
+    "karimnagar":    "కరీంనగర్",
+    "ramagundam":    "రామగుండం",
+    "mahbubnagar":   "మహబూబ్‌నగర్",
+    "nalgonda":      "నల్గొండ",
+    "adilabad":      "ఆదిలాబాద్",
+    "suryapet":      "సూర్యాపేట",
+    "miryalaguda":   "మిర్యాలగూడ",
+    "siddipet":      "సిద్దిపేట",
+    "jagtial":       "జగిత్యాల",
+    "mancherial":    "మంచిర్యాల",
+    "sangareddy":    "సంగారెడ్డి",
+    "medak":         "మేడక్",
+    "vikarabad":     "వికారాబాద్",
+    "wanaparthy":    "వనపర్తి",
+    "jogulamba":     "జోగులాంబ",
+    "bhadradri":     "భద్రాద్రి",
+    "kurnool":       "కర్నూల్",
+    "vizag":         "విశాఖపట్నం",
+    "visakhapatnam": "విశాఖపట్నం",
+    "vijayawada":    "విజయవాడ",
+    "tirupati":      "తిరుపతి",
+    "guntur":        "గుంటూర్",
+    "nellore":       "నెల్లూరు",
+    "kadapa":        "కడప",
+    "anantapur":     "అనంతపురం",
+    "kakinada":      "కాకినాడ",
+    "rajahmundry":   "రాజమహేంద్రవరం",
+    "eluru":         "ఏలూరు",
+    "ongole":        "ఒంగోలు",
+    "srikakulam":    "శ్రీకాకుళం",
+    "vizianagaram":  "విజయనగరం",
+    "chittoor":      "చిత్తూరు",
+    "hindupur":      "హిందూపురం",
+    "tenali":        "తెనాలి",
+    "proddatur":     "ప్రొద్దుటూరు",
+    "nandyal":       "నంద్యాల",
+    "machilipatnam": "మచిలీపట్నం",
+    "madhapur":      "మాధాపూర్",
+    "hyderabad madhapur": "మాధాపూర్",
+    "news":          "వార్త",
 }
 
 
