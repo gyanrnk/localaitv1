@@ -126,7 +126,7 @@ SUPPORTED_VIDEO_FORMATS = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
 SUPPORTED_AUDIO_FORMATS = ['.mp3', '.wav', '.m4a', '.ogg']
 
 INTRO_VIDEO_DURATION       = 27
-HEADLINE_DURATION_PER_ITEM = 6
+HEADLINE_DURATION_PER_ITEM = 8
 ADDRESS_GIF_PATH = os.path.join(BASE_DIR, 'assets', 'address.gif')  # path adjust karo
 REPORTER_DURATION = 5 
 API_BASE_URL = "https://srv1264596.hstgr.cloud"
@@ -203,24 +203,25 @@ LANGUAGE ENFORCEMENT: Input may arrive in Urdu, Hindi, English, or any other lan
 TELUGU_HEADLINE_PROMPT = f"""You are an expert Telugu news headline writer for broadcast TV.
 
 REQUIREMENTS:
-1. LENGTH: 6-10 words — complete, meaningful sentence
+1. LENGTH: 10-15 words — 1 to 2 complete lines, full meaningful sentence(s)
 2. DURATION: Must fit in {HEADLINE_DURATION_PER_ITEM} seconds when spoken
-3. STYLE: Complete sentence with verb — tells WHO did WHAT or WHAT happened WHERE
-4. CONTENT: Most important fact — specific, not vague
+3. STYLE: Complete sentence(s) with verb — WHO did WHAT or WHAT happened WHERE and HOW
+4. CONTENT: Most important fact — specific details, not vague summaries
 5. LANGUAGE: Pure Telugu, no English mixing
-6. AVOID: Questions, exclamation marks, filler words, cutting sentence mid-way
+6. FORMAT: Can be 2 lines if needed — use newline between sentences
+7. AVOID: Questions, exclamation marks, filler words, cutting mid-sentence
 
 GOOD EXAMPLES:
-  వేములవాడలో సమ్మె విజయవంతంగా ముగిసింది
-  కరీంనగర్‌లో భారీ వర్షాలకు పంటలు దెబ్బతిన్నాయి
-  రాష్ట్ర ప్రభుత్వం కొత్త పథకాన్ని ప్రకటించింది
-  మున్సిపల్ సమావేశంలో కీలక తీర్మానాలు ఆమోదించారు
+  వేములవాడలో విద్యార్థి సంఘాల సమ్మె విజయవంతంగా ముగిసింది
+  కరీంనగర్‌లో భారీ వర్షాలకు వేలాది ఎకరాల పంటలు దెబ్బతిన్నాయి
+  రాష్ట్ర ప్రభుత్వం రైతులకు కొత్త రుణమాఫీ పథకాన్ని ప్రకటించింది
+  మున్సిపల్ సమావేశంలో కీలకమైన నీటి సరఫరా తీర్మానాలు ఆమోదించారు
 
 BAD EXAMPLES (too short/incomplete):
-  వేములవాడ సమ్మెకు   ← incomplete
+  వేములవాడ సమ్మెకు   ← incomplete, no verb
   భారత సైన్యం విజయం  ← vague, no context
 
-OUTPUT: Headline only — nothing else."""
+OUTPUT: Headline only — nothing else. If 2 lines, separate with newline."""
 
 
 # ================================

@@ -1823,11 +1823,17 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
     intro_dur = INTRO_VIDEO_DURATION
 
-    # ── Pre-fetch WhoisWho (S3) + Ad clips (S3) ──────────────────────────────
-    from s3_bulletin_fetcher import fetch_whoiswho_bulletin, fetch_ad_clips
+    # ── Pre-fetch WhoisWho (S3) + Ad clips (S3 + local assets/ads1) ─────────
+    from s3_bulletin_fetcher import fetch_whoiswho_bulletin, fetch_ad_clips, fetch_local_ad_clips
 
-    _whoiswho_clip = fetch_whoiswho_bulletin()           # S3 se 1-min clip
-    _ad_clips_pool = fetch_ad_clips()                    # S3 se ads pool
+    _whoiswho_clip  = fetch_whoiswho_bulletin()          # S3 se 1-min clip
+    _s3_ads         = fetch_ad_clips()                   # S3 se ads
+    _local_ads      = fetch_local_ad_clips()             # assets/ads1/ se local ads
+    import random as _rand_ads
+    _combined_ads   = _s3_ads + [a for a in _local_ads if a not in _s3_ads]
+    _rand_ads.shuffle(_combined_ads)
+    _ad_clips_pool  = _combined_ads
+    print(f"  [ADS] S3={len(_s3_ads)} local={len(_local_ads)} combined={len(_ad_clips_pool)}")
     _ad_clips = _ad_clips_pool[:4]                       # initial 4
     _ad_reserve = _ad_clips_pool[4:10]
 

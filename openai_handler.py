@@ -560,8 +560,7 @@ class OpenAIHandler:
                 response = self.client.chat.completions.create(
                     model=self.headline_model,  # gpt-4o-mini
                     messages=[
-                        {"role": "system", "content": TELUGU_HEADLINE_PROMPT +
-                         "\n\nCRITICAL: Headline must be maximum 5-7 words only. Short and punchy. No long sentences."},
+                        {"role": "system", "content": TELUGU_HEADLINE_PROMPT},
                         {"role": "user",   "content": f"News Script:\n\n{script}"}
                     ],
                     temperature=0.3,
@@ -742,8 +741,7 @@ class GeminiHandler:
                 response = self.client.chat.completions.create(
                     model=self.headline_model,
                     messages=[
-                        {"role": "system", "content": TELUGU_HEADLINE_PROMPT +
-                         "\n\nCRITICAL: Headline must be maximum 5-7 words only. Short and punchy. No long sentences."},
+                        {"role": "system", "content": TELUGU_HEADLINE_PROMPT},
                         {"role": "user",   "content": f"News Script:\n\n{short_script}"},
                     ],
                     temperature=0.3,
