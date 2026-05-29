@@ -208,9 +208,17 @@ def fetch_ad_clips() -> List[Optional[str]]:
         local_paths = []
         for obj in mp4_files:
             local_path = os.path.join(S3_INJECT_LOCAL_DIR, os.path.basename(obj['Key']))
-            if not (os.path.exists(local_path) and os.path.getsize(local_path) > 100_000):
+            s3_mtime   = obj.get('LastModified')
+
+            local_exists = os.path.exists(local_path) and os.path.getsize(local_path) > 100_000
+            s3_is_newer  = (
+                local_exists and s3_mtime is not None and
+                s3_mtime.timestamp() > os.path.getmtime(local_path)
+            )
+            if not local_exists or s3_is_newer:
                 s3.download_file(S3_BUCKET_NAME, obj['Key'], local_path)
-                print(f"  [AD-INJECT] ✅ Downloaded: {os.path.basename(local_path)}")
+                reason = "updated on S3" if s3_is_newer else "not cached"
+                print(f"  [AD-INJECT] ✅ Downloaded ({reason}): {os.path.basename(local_path)}")
             else:
                 print(f"  [AD-INJECT] ✅ Cache hit: {os.path.basename(local_path)}")
             local_paths.append(local_path)

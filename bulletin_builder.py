@@ -1733,6 +1733,17 @@ def build_all_location_bulletins(duration_minutes: int) -> dict:
 
 # def build_bulletin(duration_minutes: int, location_id: int = None, location_name: str = None) -> Optional[str]:
 def build_bulletin(duration_minutes: int, location_id: int = None, location_name: str = None, _items_override: list = None) -> Optional[str]:
+    # ── Reset next_bulletin flag so previously-skipped items get a fresh chance ──
+    # Without this, skipped items accumulate as permanently excluded and the item
+    # pool starves, causing old used items to keep reappearing.
+    if _items_override is None:
+        try:
+            import db as _db_reset
+            _db_reset.execute("UPDATE news_items SET next_bulletin = 0 WHERE next_bulletin = 1")
+            print("  [BULLETIN] next_bulletin reset → all items eligible")
+        except Exception as _e:
+            print(f"  [BULLETIN] ⚠️ next_bulletin reset failed: {_e}")
+
     all_items = load_metadata()
 
     if _items_override is not None:
@@ -1743,12 +1754,9 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         return None
 
     # Validate items — both audio files must exist
-    # EXCLUDE items marked for next bulletin (they were skipped before)
     import s3_storage as _s3
     valid_items = []
     for item in all_items:
-        if item.get('next_bulletin'):
-            continue  # Skip items reserved for next bulletin
         headline_audio = item.get('headline_audio', '')
         script_audio   = item.get('script_audio', '')
         ha_path = os.path.join(OUTPUT_HEADLINE_DIR, headline_audio)
@@ -1764,6 +1772,26 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
             valid_items.append(item)
         else:
             print(f"⚠️ Skipping item {item.get('counter')} — audio files missing: headline_audio='{headline_audio}' exists={os.path.exists(ha_path)} | script_audio='{script_audio}' exists={os.path.exists(sa_path)}")
+
+    # ── Dedup by counter: keep best media_type per counter (video > image > audio) ──
+    # Same counter can have multiple rows (e.g., video + image for same report).
+    # Both would appear as separate items → same story in bulletin twice.
+    _MEDIA_PRIORITY = {'video': 0, 'image': 1, 'audio': 2}
+    _seen_counters: dict = {}
+    for item in valid_items:
+        ctr = item.get('counter')
+        if ctr is None:
+            continue
+        mtype = item.get('media_type', 'image')
+        if ctr not in _seen_counters:
+            _seen_counters[ctr] = item
+        else:
+            existing_priority = _MEDIA_PRIORITY.get(_seen_counters[ctr].get('media_type', 'image'), 1)
+            this_priority     = _MEDIA_PRIORITY.get(mtype, 1)
+            if this_priority < existing_priority:
+                _seen_counters[ctr] = item
+    valid_items = list(_seen_counters.values())
+    print(f"  [DEDUP] {len(valid_items)} unique items after counter dedup")
 
     # ── Location filter ───────────────────────────────────────────────────────
     if location_id is not None:

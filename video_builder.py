@@ -2105,12 +2105,21 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
         clip_end   = item.get('clip_end')
 
         # ── Cache reuse: skip rebuild if item video already exists ────────
+        # Invalidate if script audio is newer (atempo change, TTS regen, etc.)
         _cached = os.path.join(_ITEM_VIDEO_CACHE_DIR, f'item_{counter}_video.mp4')
-        if counter and os.path.exists(_cached) and os.path.getsize(_cached) > 100_000:
+        _cache_valid = (
+            counter and
+            os.path.exists(_cached) and
+            os.path.getsize(_cached) > 100_000 and
+            (not os.path.exists(sa_p) or os.path.getmtime(sa_p) <= os.path.getmtime(_cached))
+        )
+        if _cache_valid:
             news_seg_map[rank] = [_cached]
             print(f"  ♻️  Item rank={rank} counter={counter} — reused from cache")
             _write_item_ready_marker(rank, item, [_cached], reused=True)
             continue
+        elif counter and os.path.exists(_cached) and not _cache_valid:
+            print(f"  🔄 Item rank={rank} counter={counter} — cache stale (audio newer), rebuilding")
         # ─────────────────────────────────────────────────────────────────
 
         media_file = find_input_media(counter, media_type)

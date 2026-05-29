@@ -1273,6 +1273,39 @@ def _save_processed_id(report_id: str):
 
 _processed_report_ids = _load_processed_ids()
 
+# Media URL dedup — prevents same image/video processed twice when API sends duplicate IDs
+# key: first media URL, value: epoch time it was enqueued
+_recent_media_urls: dict = {}
+_MEDIA_DEDUP_TTL = 900  # 15 minutes
+
+def _is_duplicate_media(report: dict) -> bool:
+    """Return True if this report's primary media URL was seen in the last 15 minutes."""
+    from time import time as _time
+    video_paths = _to_list_safe(report.get('video_paths') or report.get('video_path'))
+    image_paths = _to_list_safe(report.get('image_paths') or report.get('image_path'))
+    audio_paths = _to_list_safe(report.get('audio_paths') or report.get('audio_path'))
+    all_urls = [u for u in (video_paths + image_paths + audio_paths) if u]
+    if not all_urls:
+        return False
+    key = all_urls[0]
+    now = _time()
+    # Expire old entries
+    expired = [k for k, t in _recent_media_urls.items() if now - t > _MEDIA_DEDUP_TTL]
+    for k in expired:
+        del _recent_media_urls[k]
+    if key in _recent_media_urls:
+        logger.info(f"⏭️ Duplicate media URL skipped (seen {now - _recent_media_urls[key]:.0f}s ago): {key[:80]}")
+        return True
+    _recent_media_urls[key] = now
+    return False
+
+def _to_list_safe(val):
+    if not val:
+        return []
+    if isinstance(val, list):
+        return val
+    return [val]
+
 def poll_reports_loop():
     """Poll reports API every 10 seconds for new submissions"""
     from config import LOCALAITV_API_TOKEN
@@ -1828,6 +1861,8 @@ def _enqueue_report(report: dict):
     has_any   = video_paths or image_paths or audio_paths
 
     if has_multi or has_any:
+        if _is_duplicate_media(report):
+            return  # same media URL seen within last 15 min — skip silently
         logger.info(f"🗂️ Multi-media report: {len(video_paths)} videos, {len(image_paths)} images, {len(audio_paths)} audios")
         import report_state_manager as _rsm
         _rsm.mark_processing(report_id, original_report=report)
