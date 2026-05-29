@@ -197,7 +197,7 @@ class TTSHandler:
 
         return chunks if chunks else [text]
 
-    def _call_tts_api(self, text_chunk: str, speaking_rate: float = 1.0) -> Optional[bytes]:
+    def _call_tts_api(self, text_chunk: str, speaking_rate: float = 1.15) -> Optional[bytes]:
         """Call Google Cloud TTS for one text chunk. Returns raw MP3 bytes or None."""
         MAX_RETRIES = 3
         client      = _get_client()

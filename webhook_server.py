@@ -1329,11 +1329,16 @@ def poll_reports_loop():
                     report_id = report.get('id')
                     if not report_id or report_id in _processed_report_ids:
                         continue
-                    
+
+                    # Only process admin-approved reports
+                    if report.get('status') != 'approved':
+                        logger.info(f"⏭️ Skipping report {report_id} — status='{report.get('status')}' (not approved)")
+                        continue
+
                     _processed_report_ids.add(report_id)
                     _save_processed_id(report_id)
                     logger.info(f"🆕 New report: {report_id}")
-                    
+
                     # Queue mein daalo
                     _enqueue_report(report)
                     
