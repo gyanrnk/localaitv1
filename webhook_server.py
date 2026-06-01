@@ -313,6 +313,11 @@ _building_lock = threading.Lock()
 _TTS_SEMAPHORE = threading.Semaphore(1)  # ek waqt mein sirf ek report TTS karega
 
 _last_count    = 0
+# Idle-build: trigger a build when unused items sit idle even if the item count
+# hasn't changed. Throttled so we don't rebuild every cycle if a build produced
+# nothing consumable.
+_last_build_attempt = 0.0
+IDLE_BUILD_COOLDOWN = 300  # seconds
 
 
 def _get_metadata_count() -> int:
@@ -1349,7 +1354,7 @@ def poll_reports_loop():
         sleep(10)
 
 def planner_loop():
-    global _last_count
+    global _last_count, _last_build_attempt
 
     _last_count = _get_metadata_count()
     logger.info(f"⏰ Planner started (current item count: {_last_count})")
@@ -1360,11 +1365,6 @@ def planner_loop():
         try:
             current_count = _get_metadata_count()
 
-            # Lines 642-657 ko yeh kar do:
-            if current_count == _last_count:
-                continue
-
-            # ← YEH UNCOMMENT + FIX KARO
             from bulletin_builder import load_metadata, BULLETINS_DIR
             existing_bulletins = [
                 d for d in os.listdir(BULLETINS_DIR)
@@ -1372,6 +1372,17 @@ def planner_loop():
             ] if os.path.exists(BULLETINS_DIR) else []
 
             unbulletined = sum(1 for m in load_metadata() if not m.get('bulletined'))
+
+            # Trigger a build when EITHER new items arrived (count changed) OR
+            # there are pending/unused items sitting idle. The idle path is
+            # throttled by IDLE_BUILD_COOLDOWN so we don't rebuild every cycle if
+            # a build produced nothing consumable (e.g. items below per-location
+            # thresholds). A successful build marks items bulletined, so the idle
+            # trigger naturally stops once the backlog is consumed.
+            count_changed = current_count != _last_count
+            idle_pending  = unbulletined >= 1 and (time() - _last_build_attempt) >= IDLE_BUILD_COOLDOWN
+            if not (count_changed or idle_pending):
+                continue
 
             if not existing_bulletins and current_count < 5:
                 logger.info(f"⏳ First bulletin needs 5 items — only {current_count} ready")
@@ -1381,16 +1392,15 @@ def planner_loop():
                 logger.info(f"⏳ Only {current_count} items — waiting for at least 6")
                 continue
 
-            # logger.info(f"🆕 {unbulletined} new item(s) pending — triggering build")
-            # threading.Thread(target=_run_planner, daemon=True).start()
-            # FIX:
-            logger.info(f"🆕 {unbulletined} new item(s) pending — triggering build")
-            if not _building_lock.locked():
-                threading.Thread(target=_run_planner, daemon=True).start()
-            else:
-                logger.info("🔒 Build in progress — next build will auto-trigger after current finishes")
-            
-            _last_count = current_count
+            if _building_lock.locked():
+                logger.info("🔒 Build in progress — will re-evaluate next cycle")
+                continue
+
+            _reason = "new items" if count_changed else f"idle backlog of {unbulletined} unbulletined"
+            logger.info(f"🆕 {unbulletined} item(s) pending [{_reason}] — triggering build")
+            threading.Thread(target=_run_planner, daemon=True).start()
+            _last_count         = current_count
+            _last_build_attempt = time()
             # ─────────────────────────────────────────────────────────────
 
             # logger.info(
