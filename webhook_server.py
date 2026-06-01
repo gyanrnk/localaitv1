@@ -1320,11 +1320,12 @@ def poll_reports_loop():
                 },
                 timeout=10
             )
+            if resp.status_code != 200:
+                logger.warning(f"⚠️ Reports API returned {resp.status_code}: {resp.text[:200]}")
             if resp.status_code == 200:
                 data = resp.json()
-                # debug_report.json write removed — was local-only and not needed in production
                 reports = data.get('items', data.get('data', []))
-                
+                logger.info(f"📋 Poll: {len(reports)} reports from API")
                 for report in reports:
                     report_id = report.get('id')
                     if not report_id or report_id in _processed_report_ids:

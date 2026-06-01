@@ -77,7 +77,11 @@ class FileManager:
         return "\n".join(lines)
 
     def _load_counters(self) -> dict:
-        """Load existing file counters — scan local dir, fallback to DB max."""
+        """Load existing file counters — always max(local_scan, db_max) per type.
+
+        DB is the source of truth for which counters are already used.
+        Local scan alone is unreliable after partial cleanup or restart.
+        """
         counters = {'image': 0, 'video': 0, 'audio': 0}
 
         def _max_counter(directory: str, prefix: str) -> int:
@@ -103,30 +107,28 @@ class FileManager:
         local_video = _max_counter(INPUT_VIDEO_DIR, PREFIX_VIDEO)
         local_audio = _max_counter(INPUT_AUDIO_DIR, PREFIX_AUDIO)
 
-        # If local dirs are empty (fresh deployment), fall back to DB max per media type.
-        # Use per-type max so image/video/audio counters don't collide on the same number.
-        if local_image == 0 and local_video == 0 and local_audio == 0:
-            try:
-                import db as _db
-                rows = _db.fetchall("""
-                    SELECT media_type, MAX(counter) AS mx
-                    FROM news_items
-                    WHERE media_type IN ('image','video','audio')
-                    GROUP BY media_type
-                """)
-                db_map = {r['media_type']: int(r['mx'] or 0) for r in rows}
-                if any(db_map.values()):
-                    counters['image'] = db_map.get('image', 0)
-                    counters['video'] = db_map.get('video', 0)
-                    counters['audio'] = db_map.get('audio', 0)
-                    print(f"[FileManager] DB counters (fresh deploy): {db_map}")
-                    return counters
-            except Exception as e:
-                print(f"[FileManager] DB counter fallback failed: {e}")
+        # Always query DB max per type — prevents reusing a counter that already
+        # exists in DB when local files were partially cleaned up after a restart.
+        db_image = db_video = db_audio = 0
+        try:
+            import db as _db
+            rows = _db.fetchall("""
+                SELECT media_type, MAX(counter) AS mx
+                FROM news_items
+                WHERE media_type IN ('image','video','audio')
+                GROUP BY media_type
+            """)
+            db_map = {r['media_type']: int(r['mx'] or 0) for r in rows}
+            db_image = db_map.get('image', 0)
+            db_video = db_map.get('video', 0)
+            db_audio = db_map.get('audio', 0)
+        except Exception as e:
+            print(f"[FileManager] DB counter lookup failed, using local scan only: {e}")
 
-        counters['image'] = local_image
-        counters['video'] = local_video
-        counters['audio'] = local_audio
+        counters['image'] = max(local_image, db_image)
+        counters['video'] = max(local_video, db_video)
+        counters['audio'] = max(local_audio, db_audio)
+        print(f"[FileManager] Counters — local: i={local_image} v={local_video} a={local_audio} | db: i={db_image} v={db_video} a={db_audio} | final: {counters}")
         return counters
 
     def _get_file_type(self, file_path: str) -> Optional[str]:

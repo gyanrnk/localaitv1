@@ -592,9 +592,12 @@ def add_ticker_overlay(video_path: str, out_path: str,
     labels_overlay_path = _prepare_labels_overlay()
 
     if ticker_text and ticker_text.strip():
-        # Split on ★ separator (same separator used when building the string)
-        raw = [h.strip() for h in ticker_text.replace('★', '\n').splitlines()]
-        headlines = [h for h in raw if h]
+        # Split ONLY on the ★ separator (the separator used when building the
+        # string). Headlines themselves may contain an internal newline (the
+        # 2-line card format) — collapse that to a single space so each headline
+        # stays ONE scrolling entry instead of being shredded into two fragments.
+        headlines = [' '.join(h.split()) for h in ticker_text.split('★')]
+        headlines = [h for h in headlines if h]
         if not headlines:
             headlines = _load_24hr_headlines()
         print(f"  ✅ [TICKER] {len(headlines)} headlines from ticker_text arg")

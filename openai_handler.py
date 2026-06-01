@@ -545,31 +545,36 @@ class OpenAIHandler:
 
 
     def generate_headline(self, script: str) -> Optional[str]:
-        """
-        Generate a short Telugu headline from a news script.
-
-        Args:
-            script: The Telugu news script
-
-        Returns:
-            Telugu headline string, or None on failure
-        """
-        try:
-            with self._semaphore:
-                time.sleep(1.5)  # breathing room between calls
-                response = self.client.chat.completions.create(
-                    model=self.headline_model,  # gpt-4o-mini
-                    messages=[
-                        {"role": "system", "content": TELUGU_HEADLINE_PROMPT},
-                        {"role": "user",   "content": f"News Script:\n\n{script}"}
-                    ],
-                    temperature=0.3,
-                    max_tokens=250,
-                )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"❌ OpenAI headline generation error: {e}")
-            return None
+        # Retry on empty/short/error so a transient failure doesn't fall through
+        # to the caller's script-prefix fallback (which produces broken headlines).
+        last_err = None
+        for attempt in range(3):
+            try:
+                with self._semaphore:
+                    time.sleep(1.5 if attempt == 0 else 2.5 * attempt)
+                    response = self.client.chat.completions.create(
+                        model=self.headline_model,
+                        messages=[
+                            {"role": "system", "content": TELUGU_HEADLINE_PROMPT},
+                            {"role": "user",   "content": f"News Script:\n\n{script}"}
+                        ],
+                        temperature=0.3,
+                        max_tokens=250,
+                    )
+                raw = response.choices[0].message.content
+                headline = (raw or "").strip()
+                wc = len(headline.split())
+                # A valid headline is at least 3 words; anything shorter is junk.
+                if wc >= 3:
+                    print(f"[OpenAI] headline word count: {wc} | {headline!r}")
+                    return headline
+                print(f"[OpenAI] ⚠️ headline too short ({wc} words) on attempt {attempt+1} — retrying")
+            except Exception as e:
+                last_err = e
+                print(f"❌ OpenAI headline generation error (attempt {attempt+1}): {e}")
+        if last_err:
+            print(f"❌ OpenAI headline generation gave up after retries: {last_err}")
+        return None
 
 
     def transcribe_audio(self, audio_path: str) -> dict:
@@ -730,31 +735,72 @@ class GeminiHandler:
             print(f"❌ Gemini script generation error: {e}")
             return None
 
-    def generate_headline(self, script: str) -> Optional[str]:
-        print(f"[GEMINI] 📰  generate_headline | model={self.headline_model}")
-        # send only first ~100 words to keep prompt tight
-        words = script.split()
-        short_script = " ".join(words[:100]) if len(words) > 100 else script
+    def review_headline(self, citizen_headline: str) -> str:
+        """Review and improve citizen reporter's headline. Returns improved headline or original.
+        If result exceeds 8 words, automatically condenses it while preserving meaning."""
+        from config import HEADLINE_REVIEWER_PROMPT
+        if not citizen_headline or not citizen_headline.strip():
+            return citizen_headline
+        print(f"[GEMINI] 🔍 review_headline | input={citizen_headline[:60]}")
         try:
             with self._semaphore:
-                time.sleep(1.0)
+                time.sleep(0.5)
                 response = self.client.chat.completions.create(
                     model=self.headline_model,
                     messages=[
-                        {"role": "system", "content": TELUGU_HEADLINE_PROMPT},
-                        {"role": "user",   "content": f"News Script:\n\n{short_script}"},
+                        {"role": "system", "content": HEADLINE_REVIEWER_PROMPT},
+                        {"role": "user",   "content": f"Citizen Headline:\n{citizen_headline.strip()}"},
                     ],
-                    temperature=0.3,
-                    max_tokens=250,
+                    temperature=0.2,
+                    max_tokens=80,
                 )
-            raw = response.choices[0].message.content
-            if not raw:
-                print(f"[GEMINI] ⚠️ generate_headline got empty response, finish_reason={response.choices[0].finish_reason}")
-                return None
-            return raw.strip()
+            result = (response.choices[0].message.content or "").strip()
+            if not result:
+                return citizen_headline
+
+            word_count = len(result.split())
+            if word_count > 8:
+                print(f"[GEMINI] ⚠️ review_headline: {word_count} words (>8) — using as-is, meaning preserved")
+            print(f"[GEMINI] ✅ review_headline | words={word_count} | output={result}")
+            return result
         except Exception as e:
-            print(f"❌ Gemini headline generation error: {e}")
-            return None
+            print(f"[GEMINI] ⚠️ review_headline failed: {e}")
+        return citizen_headline
+
+    def generate_headline(self, script: str) -> Optional[str]:
+        print(f"[GEMINI] 📰  generate_headline | model={self.headline_model}")
+        words = script.split()
+        short_script = " ".join(words[:100]) if len(words) > 100 else script
+        # Retry on empty/short/error so a transient failure doesn't fall through
+        # to the caller's script-prefix fallback (which produces broken headlines).
+        last_err = None
+        for attempt in range(3):
+            try:
+                with self._semaphore:
+                    time.sleep(1.0 if attempt == 0 else 2.5 * attempt)
+                    response = self.client.chat.completions.create(
+                        model=self.headline_model,
+                        messages=[
+                            {"role": "system", "content": TELUGU_HEADLINE_PROMPT},
+                            {"role": "user",   "content": f"News Script:\n\n{short_script}"},
+                        ],
+                        temperature=0.3,
+                        max_tokens=250,
+                    )
+                raw = response.choices[0].message.content
+                headline = (raw or "").strip()
+                wc = len(headline.split())
+                if wc >= 3:
+                    print(f"[GEMINI] headline word count: {wc} | {headline!r}")
+                    return headline
+                print(f"[GEMINI] ⚠️ generate_headline short/empty ({wc} words) on attempt {attempt+1}, "
+                      f"finish_reason={response.choices[0].finish_reason} — retrying")
+            except Exception as e:
+                last_err = e
+                print(f"❌ Gemini headline generation error (attempt {attempt+1}): {e}")
+        if last_err:
+            print(f"❌ Gemini headline generation gave up after retries: {last_err}")
+        return None
 
     def generate_editorial_plan(self, transcript_text: str) -> str:
         print(f"[GEMINI] 🗂️  generate_editorial_plan | model={self.model}")

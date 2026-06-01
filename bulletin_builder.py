@@ -1812,14 +1812,13 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
     # ranked    = rank_news_items(valid_items)
     # Pending-first: agar enough unused items hain to old skip
     unused_items = [x for x in valid_items if x.get('used_count', 0) == 0]
-    MIN_ITEMS_THRESHOLD = 8
 
-    if len(unused_items) >= MIN_ITEMS_THRESHOLD:
-        ranked = rank_news_items(unused_items)
-        print(f"  [RANK] {len(unused_items)} unused items — old items skipped")
-    else:
-        ranked = rank_news_items(valid_items)
-        print(f"  [RANK] Only {len(unused_items)} unused — mixing with old items")
+    if not unused_items:
+        print("❌ No new (unused) items available — skipping bulletin build")
+        return None
+
+    ranked = rank_news_items(unused_items)
+    print(f"  [RANK] {len(unused_items)} new items only — old items excluded")
 
     intro_dur = INTRO_VIDEO_DURATION
 

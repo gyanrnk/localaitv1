@@ -220,29 +220,44 @@ WHAT NOT TO DO:
 
 OUTPUT: Only the final headline. Nothing else."""
 
-TELUGU_HEADLINE_PROMPT = f"""Write a Telugu TV news headline. Follow these rules exactly.
+TELUGU_HEADLINE_PROMPT = """Write one Telugu TV news headline using this exact 4-slot formula:
 
-RULE 1 — WORD COUNT: Exactly 8 words. Count every word.
-RULE 2 — COMPLETE SENTENCE: Must end with a verb. Never end on a noun or adjective.
-RULE 3 — STRUCTURE: [Place/Subject] + [Action Verb] + [Object/Context]
-RULE 4 — LANGUAGE: Telugu script only. No English, Hindi, Urdu.
-RULE 5 — FORMAT: 2 lines using newline. Split naturally at 4 words each line.
+  [సందర్భం] + [కర్త] + [కర్మ] + [క్రియ]
 
-VERB ENDINGS that are CORRECT (sentence is complete):
-  జరిగింది / చేశారు / పడ్డారు / అన్నారు / తెలిపారు / ముగిసింది / దెబ్బతిన్నాయి / కూలిపోయింది
+SLOT DEFINITIONS:
+  [సందర్భం]  — 1-2 words  — WHERE or WHEN or CONTEXT  (e.g. హైదరాబాద్‌లో, ఏపీలో, నేడు)
+  [కర్త]      — 1-2 words  — WHO did it               (e.g. పోలీసులు, ప్రభుత్వం, రైతులు)
+  [కర్మ]      — 2-3 words  — WHAT — the object/action  (e.g. నిరసన కార్యక్రమం, భూసేకరణ నిర్ణయాన్ని)
+  [క్రియ]     — 1 word     — VERB — past tense Telugu   (e.g. చేశారు, ప్రకటించింది, అరెస్టు చేశారు)
 
-NOUN ENDINGS that are WRONG (sentence is incomplete):
-  ఎరువుల / సంఘం / రైతు / పంటలు / నేతలు / సమావేశం
+TOTAL: 5 to 8 words. Every slot must be filled. Sentence must end on the verb.
 
-WRONG: ఏపీ రైతు సంఘం ఎరువుల        (4 words, ends on noun — INCOMPLETE)
-RIGHT: ఏపీ రైతు సంఘం ఎరువుల
-పంపిణీ కార్యక్రమం నిర్వహించింది   (8 words, ends on verb)
+LANGUAGE: Telugu script only. Zero English, Hindi, Urdu words.
 
-WRONG: ఐపీఎల్‌లో అదరగొట్టిన          (ends on adjective — INCOMPLETE)
-RIGHT: ఐపీఎల్‌లో వైభవ్
-మెరుపు ఇన్నింగ్స్‌తో అదరగొట్టాడు   (8 words, ends on verb)
+FORMAT: Output on 2 lines. Break naturally between [కర్త] and [కర్మ].
 
-OUTPUT: Only the 8-word Telugu headline. Nothing else."""
+EXAMPLES:
+
+  హైదరాబాద్‌లో పోలీసులు             ← సందర్భం + కర్త
+  మాదక ద్రవ్యాల వ్యాపారిని అరెస్టు చేశారు  ← కర్మ + క్రియ
+  (7 words — complete sentence)
+
+  తెలంగాణ ప్రభుత్వం                  ← సందర్భం+కర్త merged
+  కొత్త రైతు పథకాన్ని ప్రకటించింది   ← కర్మ + క్రియ
+  (6 words — complete sentence)
+
+  ఏపీలో భారీ వర్షాలకు               ← సందర్భం + కర్మ
+  రైతుల పంటలు దెబ్బతిన్నాయి         ← కర్త+కర్మ+క్రియ
+  (7 words — complete sentence)
+
+WRONG (incomplete — ends on noun, no verb):
+  ఏపీ రైతు సంఘం ఎరువుల పంపిణీ కార్యక్రమం
+
+RIGHT (complete — verb at end):
+  ఏపీ రైతు సంఘం ఎరువుల
+  పంపిణీ కార్యక్రమం నిర్వహించింది
+
+OUTPUT: Only the 2-line Telugu headline. Nothing else."""
 
 
 # ================================

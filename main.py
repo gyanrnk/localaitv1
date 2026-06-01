@@ -61,8 +61,27 @@ def _smart_split(script: str):
         return text, ""
  
     return intro, analysis
- 
- 
+
+
+def _headline_fallback(script: str) -> str:
+    """Last-resort headline when LLM generation fails after retries.
+
+    Returns the FIRST COMPLETE SENTENCE of the script (up to ~12 words) rather
+    than an arbitrary first-N-words fragment. A complete clause is far less
+    broken than a mid-sentence cut like 'X collector elders problems special'.
+    """
+    import re
+    text = (script or "").strip()
+    if not text:
+        return ""
+    m = re.search(r'[.!?।]', text)
+    first_sentence = text[:m.start()].strip() if m else text
+    words = first_sentence.split()
+    if len(words) > 12:
+        first_sentence = " ".join(words[:12])
+    return first_sentence or " ".join(text.split()[:8])
+
+
 class NewsBot:
     """Main News Bot orchestrator"""
  
@@ -148,7 +167,15 @@ class NewsBot:
             return False
  
         # ── Step 2: Headline ─────────────────────────────────────────────────────
-        headline = item.get('headline') or get_llm_handler(item.get('location_name', '')).generate_headline(script)
+        _raw_headline = item.get('headline', '').strip()
+        _llm = get_llm_handler(item.get('location_name', ''))
+        if _raw_headline:
+            headline = _llm.review_headline(_raw_headline)
+        else:
+            headline = _llm.generate_headline(script)
+        if not headline or not headline.strip():
+            print("⚠️ [REGEN] Headline empty after LLM — using first-sentence fallback")
+            headline = _raw_headline or _headline_fallback(script)
  
         # ── Step 3: TTS — missing audio files regenerate karo ────────────────────
         import tempfile, concurrent.futures
@@ -771,7 +798,10 @@ class NewsBot:
             analysis_script = self.telugu.remove_media_references(analysis_script)  # ← add
  
         # ── Headline ──────────────────────────────────────────────────────────
-        headline = get_llm_handler(location_name).generate_headline(script) or " ".join(script.split()[:5])
+        headline = get_llm_handler(location_name).generate_headline(script)
+        if not headline:
+            print("⚠️ Headline generation failed after retries — using first-sentence fallback")
+            headline = _headline_fallback(script)
  
         # ── Stage 3 checkpoint: script + headline done ────────────────────────
         if report_id:
@@ -1249,8 +1279,8 @@ class NewsBot:
         print("📰 Generating headline...")
         headline = get_llm_handler(location_address).generate_headline(script)
         if not headline:
-            print("⚠️ Headline generation failed — using default")
-            headline = " ".join(script.split()[:5])
+            print("⚠️ Headline generation failed after retries — using first-sentence fallback")
+            headline = _headline_fallback(script)
  
         # ─── TTS Generation ──────────────────────────────────────────────────
         audio_temp_path          = None

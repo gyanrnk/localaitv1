@@ -813,19 +813,31 @@ def _create_headline_overlay(headline_text: str, width: int, height: int,
     html_file   = None
  
     try:
-        words = headline_text.strip().split()
-        if len(words) <= 3:
-            lines = [" ".join(words)]
+        text  = headline_text.strip()
+        words = text.split()
+        n     = len(words)
+
+        # Telugu chars are ~2x wider than Latin — use char count for font size
+        char_count = len(text)
+        if char_count <= 12:
+            font_size = 95
+        elif char_count <= 20:
+            font_size = 82
+        elif char_count <= 32:
+            font_size = 70
+        elif char_count <= 45:
+            font_size = 62
         else:
-            lines = [" ".join(words[:3])]          # Line 1: 3 words
-            remaining = words[3:]
-            mid = (len(remaining) + 1) // 2
-            lines.append(" ".join(remaining[:mid])) # Line 2
-            if remaining[mid:]:
-                lines.append(" ".join(remaining[mid:])) # Line 3
-        if not lines:
-            lines = [headline_text.strip()]
- 
+            font_size = 54
+
+        # Balanced line split: 2 words per line for small, 3 for larger
+        words_per_line = 2 if n <= 4 else 3
+        lines = []
+        for i in range(0, n, words_per_line):
+            chunk = " ".join(words[i:i + words_per_line])
+            if chunk:
+                lines.append(chunk)
+
         # Template layout (1920x1080) — pixel-measured from template.mp4:
         # Left black panel : x=117, y=0,  w=658, h=808
         # Right red panel  : x=785, y=88, w=970, h=718
@@ -834,28 +846,29 @@ def _create_headline_overlay(headline_text: str, width: int, height: int,
         RIGHT_Y = 108   # 88  + 20px padding
         RIGHT_W = 910   # 970 - 60px padding
         RIGHT_H = 678   # 718 - 40px padding
- 
+
         html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>
 {_FONT_FACE_CSS}
-* {{ margin:0; padding:0; }}
+* {{ margin:0; padding:0; box-sizing:border-box; }}
 html, body {{ width:{width}px; height:{height}px; background:rgba(0,0,0,0); }}
 .zone {{
   position:absolute;
   left:{RIGHT_X}px; top:{RIGHT_Y}px; width:{RIGHT_W}px; height:{RIGHT_H}px;
   display:flex; flex-direction:column;
-  align-items:center; justify-content:center; gap:10px;
-  overflow:hidden;
+  align-items:center; justify-content:center; gap:6px;
+  overflow:visible;
 }}
 .t {{
   font-family:'Noto Sans Telugu','Nirmala UI','Gautami',sans-serif;
-  font-size:72px; font-weight:bold; color:white;
+  font-size:{font_size}px; font-weight:bold; color:white;
   text-shadow:-2px -2px 0 #000,2px -2px 0 #000,
               -2px  2px 0 #000,2px  2px 0 #000;
-  line-height:1.25;
-  white-space:normal; word-break:break-word;
+  line-height:1.3;
+  white-space:nowrap;
   text-align:center; width:100%;
+  overflow:visible;
 }}
 </style></head><body>
 <div class="zone">
