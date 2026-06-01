@@ -12,7 +12,7 @@ OPENAI_MODEL          = os.getenv('OPENAI_MODEL', 'gpt-4o')
 OPENAI_HEADLINE_MODEL = os.getenv('OPENAI_HEADLINE_MODEL', 'gpt-4o-mini')
 OPENAI_WHISPER_MODEL  = os.getenv('OPENAI_WHISPER_MODEL', 'gpt-4o-transcribe')
 GEMINI_API_KEY        = os.getenv('GEMINI_API_KEY', '')
-GEMINI_MODEL          = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
+GEMINI_MODEL          = os.getenv('GEMINI_MODEL', 'gemini-2.5-pro')
 SARVAM_API_KEY        = os.getenv('SARVAM_API_KEY', '')
 MAX_TTS_CONCURRENCY  = int(os.getenv('MAX_TTS_CONCURRENCY', '3'))
 
@@ -200,28 +200,49 @@ REMEMBER: You are creating content for a news anchor on live television. Every w
 
 LANGUAGE ENFORCEMENT: Input may arrive in Urdu, Hindi, English, or any other language. You MUST translate and rewrite it entirely into Telugu. Output must contain ONLY Telugu script (తెలుగు లిపి). Zero tolerance for Urdu, Hindi, Arabic, or English words in the output."""
 
-TELUGU_HEADLINE_PROMPT = f"""You are an expert Telugu news headline writer for broadcast TV.
+HEADLINE_REVIEWER_PROMPT = """You are a professional TV news headline editor for LocalAI TV.
 
-REQUIREMENTS:
-1. LENGTH: 10-15 words — 1 to 2 complete lines, full meaningful sentence(s)
-2. DURATION: Must fit in {HEADLINE_DURATION_PER_ITEM} seconds when spoken
-3. STYLE: Complete sentence(s) with verb — WHO did WHAT or WHAT happened WHERE and HOW
-4. CONTENT: Most important fact — specific details, not vague summaries
-5. LANGUAGE: Pure Telugu, no English mixing
-6. FORMAT: Can be 2 lines if needed — use newline between sentences
-7. AVOID: Questions, exclamation marks, filler words, cutting mid-sentence
+YOUR JOB:
+Rewrite the given headline into the most powerful broadcast TV headline possible.
 
-GOOD EXAMPLES:
-  వేములవాడలో విద్యార్థి సంఘాల సమ్మె విజయవంతంగా ముగిసింది
-  కరీంనగర్‌లో భారీ వర్షాలకు వేలాది ఎకరాల పంటలు దెబ్బతిన్నాయి
-  రాష్ట్ర ప్రభుత్వం రైతులకు కొత్త రుణమాఫీ పథకాన్ని ప్రకటించింది
-  మున్సిపల్ సమావేశంలో కీలకమైన నీటి సరఫరా తీర్మానాలు ఆమోదించారు
+HOW TO REWRITE:
+- Target: 5 to 8 words
+- Strategy: combine words smartly, use strong verbs, drop filler words
+- NEVER drop WHO, WHAT, WHERE — these are the core of any headline
+- Use hyphens to combine related words
+- If the original is already sharp and ≤8 words, return it unchanged
 
-BAD EXAMPLES (too short/incomplete):
-  వేములవాడ సమ్మెకు   ← incomplete, no verb
-  భారత సైన్యం విజయం  ← vague, no context
+WHAT NOT TO DO:
+- Do NOT cut the headline in the middle
+- Do NOT drop location, action, or impact
+- Do NOT add information not in the original
+- Do NOT output more than 8 words
 
-OUTPUT: Headline only — nothing else. If 2 lines, separate with newline."""
+OUTPUT: Only the final headline. Nothing else."""
+
+TELUGU_HEADLINE_PROMPT = f"""Write a Telugu TV news headline. Follow these rules exactly.
+
+RULE 1 — WORD COUNT: Exactly 8 words. Count every word.
+RULE 2 — COMPLETE SENTENCE: Must end with a verb. Never end on a noun or adjective.
+RULE 3 — STRUCTURE: [Place/Subject] + [Action Verb] + [Object/Context]
+RULE 4 — LANGUAGE: Telugu script only. No English, Hindi, Urdu.
+RULE 5 — FORMAT: 2 lines using newline. Split naturally at 4 words each line.
+
+VERB ENDINGS that are CORRECT (sentence is complete):
+  జరిగింది / చేశారు / పడ్డారు / అన్నారు / తెలిపారు / ముగిసింది / దెబ్బతిన్నాయి / కూలిపోయింది
+
+NOUN ENDINGS that are WRONG (sentence is incomplete):
+  ఎరువుల / సంఘం / రైతు / పంటలు / నేతలు / సమావేశం
+
+WRONG: ఏపీ రైతు సంఘం ఎరువుల        (4 words, ends on noun — INCOMPLETE)
+RIGHT: ఏపీ రైతు సంఘం ఎరువుల
+పంపిణీ కార్యక్రమం నిర్వహించింది   (8 words, ends on verb)
+
+WRONG: ఐపీఎల్‌లో అదరగొట్టిన          (ends on adjective — INCOMPLETE)
+RIGHT: ఐపీఎల్‌లో వైభవ్
+మెరుపు ఇన్నింగ్స్‌తో అదరగొట్టాడు   (8 words, ends on verb)
+
+OUTPUT: Only the 8-word Telugu headline. Nothing else."""
 
 
 # ================================

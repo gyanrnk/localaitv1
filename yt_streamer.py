@@ -872,9 +872,14 @@ def run_streamer():
                     new_buls = [get_all_bulletins(ch["watch_dir"]) or get_all_bulletins(_BASE)
                                 for ch in active]
                     if new_buls != last_buls:
-                        debug("New bulletins — restarting streams")
-                        _terminate_streams(procs)
-                        procs = [None] * STREAM_COUNT; break
+                        # New bulletins mila — sirf concat list silently update karo
+                        # Stream restart NAHI karo — current playback continue rahegi
+                        # Next FFmpeg crash/restart pe naya bulletin pick up hoga
+                        for i, ch in enumerate(active):
+                            if new_buls[i]:
+                                build_concat_list(new_buls[i], ch["concat"], ch["label"])
+                                debug(f"[{ch['label']}] Concat list updated silently ({len(new_buls[i])} bulletins) — no restart")
+                        last_buls = new_buls
                     last_check = time.time()
 
                 # Crash recovery per channel
