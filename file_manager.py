@@ -77,10 +77,18 @@ class FileManager:
         return "\n".join(lines)
 
     def _load_counters(self) -> dict:
-        """Load existing file counters — always max(local_scan, db_max) per type.
+        """Load the GLOBAL file counter (shared across all media types).
 
-        DB is the source of truth for which counters are already used.
-        Local scan alone is unreliable after partial cleanup or restart.
+        CRITICAL: a counter must be unique across ALL media types. Previously
+        each type had its own sequence, so the Nth video (v{N}) and the Nth
+        image (i{N}) — two completely different reports — shared counter N.
+        Downstream code that keys by counter ALONE (the bulletin builder's
+        counter dedup and the item_video cache item_{counter}_video.mp4) then
+        merged/cross-contaminated the two unrelated stories → the mismatch +
+        "duplicate" items. A single global sequence makes counter unambiguous.
+
+        DB is the source of truth for the max counter already used; local scan
+        is a fallback (unreliable after partial cleanup or restart).
         """
         counters = {'image': 0, 'video': 0, 'audio': 0}
 
@@ -103,33 +111,32 @@ class FileManager:
                 pass
             return max_n
 
-        local_image = _max_counter(INPUT_IMAGE_DIR, PREFIX_IMAGE)
-        local_video = _max_counter(INPUT_VIDEO_DIR, PREFIX_VIDEO)
-        local_audio = _max_counter(INPUT_AUDIO_DIR, PREFIX_AUDIO)
+        local_max = max(
+            _max_counter(INPUT_IMAGE_DIR, PREFIX_IMAGE),
+            _max_counter(INPUT_VIDEO_DIR, PREFIX_VIDEO),
+            _max_counter(INPUT_AUDIO_DIR, PREFIX_AUDIO),
+        )
 
-        # Always query DB max per type — prevents reusing a counter that already
-        # exists in DB when local files were partially cleaned up after a restart.
-        db_image = db_video = db_audio = 0
+        # Overall max counter across ALL media types — the global high-water mark.
+        db_max = 0
         try:
             import db as _db
-            rows = _db.fetchall("""
-                SELECT media_type, MAX(counter) AS mx
-                FROM news_items
-                WHERE media_type IN ('image','video','audio')
-                GROUP BY media_type
-            """)
-            db_map = {r['media_type']: int(r['mx'] or 0) for r in rows}
-            db_image = db_map.get('image', 0)
-            db_video = db_map.get('video', 0)
-            db_audio = db_map.get('audio', 0)
+            rows = _db.fetchall("SELECT MAX(counter) AS mx FROM news_items")
+            db_max = int((rows[0].get('mx') if rows else 0) or 0)
         except Exception as e:
             print(f"[FileManager] DB counter lookup failed, using local scan only: {e}")
 
-        counters['image'] = max(local_image, db_image)
-        counters['video'] = max(local_video, db_video)
-        counters['audio'] = max(local_audio, db_audio)
-        print(f"[FileManager] Counters — local: i={local_image} v={local_video} a={local_audio} | db: i={db_image} v={db_video} a={db_audio} | final: {counters}")
-        return counters
+        g = max(local_max, db_max)
+        print(f"[FileManager] GLOBAL counter start = {g} (local={local_max} db={db_max})")
+        return {'image': g, 'video': g, 'audio': g}
+
+    def _next_counter(self) -> int:
+        """Atomically allocate the next GLOBAL counter (unique across all types)."""
+        with self._lock:
+            nxt = max(self.counters.values()) + 1
+            # keep all type-keys in lock-step so the sequence stays global
+            self.counters = {'image': nxt, 'video': nxt, 'audio': nxt}
+            return nxt
 
     def _get_file_type(self, file_path: str) -> Optional[str]:
         """Determine file type from extension"""
@@ -153,9 +160,7 @@ class FileManager:
             print(f"Unsupported file type: {file_path}")
             return None
 
-        with self._lock:
-            self.counters[file_type] += 1
-            counter = self.counters[file_type]
+        counter = self._next_counter()
 
         ext = Path(file_path).suffix.lower()
         prefix_map = {
@@ -234,9 +239,7 @@ class FileManager:
         }
         prefix, target_dir = prefix_map[file_type]
 
-        with self._lock:
-            self.counters[file_type] += 1
-            counter = self.counters[file_type]
+        counter = self._next_counter()
 
         saved_filenames = []
         saved_paths = []

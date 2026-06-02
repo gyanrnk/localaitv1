@@ -431,7 +431,7 @@ def _send_bulletin_items_to_api(items: list):
             # ── item video: item_cache from S3 (retry — async upload lag sakta hai) ──
             news_segment_url = None
             if counter is not None:
-                cache_key = _s3_items.key_for_item_cache(counter)
+                cache_key = _s3_items.key_for_item_cache(counter, media_type or 'video')
                 for _attempt in range(5):
                     if _s3_items.file_exists(cache_key):
                         news_segment_url = _s3_items.public_url(cache_key)

@@ -51,16 +51,21 @@ from PIL import Image, ImageDraw, ImageFont
 from ticker_overlay import add_ticker_overlay
 from config import BASE_OUTPUT_DIR, ITEM_VIDEO_CACHE_DIR as _ITEM_VIDEO_CACHE_DIR, S3_INJECT_LOCAL_DIR
  
-def _save_to_item_cache(counter, src_path: str):
-    """Copy a freshly-built item video to local cache and upload to S3 asynchronously."""
+def _save_to_item_cache(counter, src_path: str, media_type: str = 'video'):
+    """Copy a freshly-built item video to local cache and upload to S3 asynchronously.
+
+    The cache filename includes media_type so an image item and a video item
+    that share a counter number (legacy per-type counters) never overwrite or
+    reuse each other's video → prevents the headline/clip mismatch."""
     if not src_path or not os.path.exists(src_path):
         return
     os.makedirs(_ITEM_VIDEO_CACHE_DIR, exist_ok=True)
-    dst = os.path.join(_ITEM_VIDEO_CACHE_DIR, f'item_{counter}_video.mp4')
+    fname = f'item_{counter}_{media_type}.mp4'
+    dst = os.path.join(_ITEM_VIDEO_CACHE_DIR, fname)
     try:
         import shutil as _sh
         _sh.copy2(src_path, dst)
-        print(f"  💾 [CACHE] item_{counter}_video.mp4 saved locally")
+        print(f"  💾 [CACHE] {fname} saved locally")
     except Exception as _e:
         print(f"  ⚠️  [CACHE] local copy failed counter={counter}: {_e}")
         dst = src_path  # still try S3 upload from source
@@ -68,7 +73,7 @@ def _save_to_item_cache(counter, src_path: str):
     # Async S3 upload — non-blocking
     try:
         import s3_storage as _s3
-        _s3.upload_file_async(dst, _s3.key_for_item_cache(counter))
+        _s3.upload_file_async(dst, _s3.key_for_item_cache(counter, media_type))
     except Exception as _e:
         print(f"  ⚠️  [CACHE] S3 upload enqueue failed counter={counter}: {_e}")
  
@@ -2009,7 +2014,8 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
     # cross karne ka sabse clean tarika yahi hai.
     def _write_item_ready_marker(rank: int, item: dict, segments: list, reused: bool = False):
         if not reused and len(segments) == 1 and item.get('counter'):
-            _save_to_item_cache(item.get('counter'), segments[0])
+            _save_to_item_cache(item.get('counter'), segments[0],
+                                item.get('media_type', 'video'))
         marker_path = os.path.join(segments_dir, f'item_{rank:02d}_ready.json')
         try:
             with open(marker_path, 'w', encoding='utf-8') as _mf:
@@ -2119,7 +2125,7 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
 
         # ── Cache reuse: skip rebuild if item video already exists ────────
         # Invalidate if script audio is newer (atempo change, TTS regen, etc.)
-        _cached = os.path.join(_ITEM_VIDEO_CACHE_DIR, f'item_{counter}_video.mp4')
+        _cached = os.path.join(_ITEM_VIDEO_CACHE_DIR, f'item_{counter}_{media_type}.mp4')
         _cache_valid = (
             counter and
             os.path.exists(_cached) and

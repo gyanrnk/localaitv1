@@ -1731,6 +1731,99 @@ def build_all_location_bulletins(duration_minutes: int) -> dict:
     return results
 
 
+def _heal_missing_audio(item: dict, ha_path: str, sa_path: str) -> bool:
+    """Regenerate an item's missing headline/script audio from its stored script
+    instead of skipping it at build time. Returns True if BOTH audio files now
+    exist. Closes the sync gap where a DB row exists but its S3/local audio is
+    gone (async upload lost or aged out) — which otherwise silently drops the
+    item and can leave bulletins empty."""
+    counter        = item.get('counter')
+    media_type     = item.get('media_type', 'image')
+    headline_audio = item.get('headline_audio', '')
+    script_audio   = item.get('script_audio', '')
+    script_file    = item.get('script_filename', '')
+    if not (headline_audio and script_audio):
+        return False
+
+    import s3_storage as _s3
+
+    # 1) Recover the script text: local file → S3 → original_text/intro_script
+    script_text = ''
+    sc_path = os.path.join(OUTPUT_SCRIPT_DIR, script_file) if script_file else ''
+    if sc_path and not os.path.exists(sc_path) and script_file:
+        try:
+            _s3.ensure_local(sc_path, _s3.key_for_script(script_file))
+        except Exception:
+            pass
+    if sc_path and os.path.exists(sc_path):
+        try:
+            script_text = open(sc_path, encoding='utf-8').read().strip()
+        except Exception:
+            script_text = ''
+    if not script_text:
+        script_text = (item.get('original_text') or item.get('intro_script') or '').strip()
+    if not script_text:
+        return False  # genuinely unrecoverable — must skip
+
+    # 2) Voice — mirror ingest's per-index male/female alternation
+    try:
+        from tts_handler import detect_channel, get_tts_for_channel
+        import db as _db
+        _idx = _db.fetchall("SELECT COUNT(*) AS n FROM news_items WHERE counter <= %s", (counter,))
+        item_index = max(0, int(_idx[0]['n']) - 1) if _idx else 0
+        tts = get_tts_for_channel(detect_channel(item.get('location_name', '') or ''), item_index)
+    except Exception as _e:
+        print(f"  ⚠️ [HEAL] TTS init failed counter={counter}: {_e}")
+        return False
+
+    # 3) Script audio
+    if not os.path.exists(sa_path):
+        try:
+            if tts.generate_audio(script_text, sa_path) and os.path.exists(sa_path):
+                _s3.upload_file_async(sa_path, _s3.key_for_audio(script_audio))
+                print(f"  🩹 [HEAL] script audio regenerated counter={counter}")
+        except Exception as _e:
+            print(f"  ⚠️ [HEAL] script audio failed counter={counter}: {_e}")
+
+    # 4) Headline audio — regenerate the headline text first if missing/incomplete
+    if not os.path.exists(ha_path):
+        headline = (item.get('headline') or '').strip()
+
+        def _incomplete(h: str) -> bool:
+            if not h:
+                return True
+            if '\n' in h:
+                return False
+            return len(h) <= 4 or len(h.split()) <= 6
+
+        if _incomplete(headline):
+            try:
+                from openai_handler import get_llm_handler
+                new_hl = get_llm_handler(item.get('location_name', '') or '').generate_headline(script_text)
+                if new_hl and new_hl.strip():
+                    headline = new_hl.strip()
+                    item['headline'] = headline
+                    try:
+                        import db as _db2
+                        _db2.execute(
+                            "UPDATE news_items SET headline=%s WHERE counter=%s AND media_type=%s",
+                            (headline, counter, media_type),
+                        )
+                    except Exception:
+                        pass
+            except Exception as _e:
+                print(f"  ⚠️ [HEAL] headline regen failed counter={counter}: {_e}")
+        if headline:
+            try:
+                if tts.generate_audio(headline, ha_path) and os.path.exists(ha_path):
+                    _s3.upload_file_async(ha_path, _s3.key_for_audio(headline_audio))
+                    print(f"  🩹 [HEAL] headline audio regenerated counter={counter}")
+            except Exception as _e:
+                print(f"  ⚠️ [HEAL] headline audio failed counter={counter}: {_e}")
+
+    return os.path.exists(ha_path) and os.path.exists(sa_path)
+
+
 # def build_bulletin(duration_minutes: int, location_id: int = None, location_name: str = None) -> Optional[str]:
 def build_bulletin(duration_minutes: int, location_id: int = None, location_name: str = None, _items_override: list = None) -> Optional[str]:
     # ── Reset next_bulletin flag so previously-skipped items get a fresh chance ──
@@ -1768,10 +1861,16 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         if script_audio and not os.path.exists(sa_path):
             _s3.ensure_local(sa_path, _s3.key_for_audio(script_audio))
 
+        # Self-heal: if audio is still missing after the S3 fallback, regenerate
+        # it from the stored script instead of silently dropping the item.
+        if not (headline_audio and script_audio and os.path.exists(ha_path) and os.path.exists(sa_path)):
+            if _heal_missing_audio(item, ha_path, sa_path):
+                print(f"  🩹 [HEAL] item {item.get('counter')} recovered (audio regenerated)")
+
         if headline_audio and script_audio and os.path.exists(ha_path) and os.path.exists(sa_path):
             valid_items.append(item)
         else:
-            print(f"⚠️ Skipping item {item.get('counter')} — audio files missing: headline_audio='{headline_audio}' exists={os.path.exists(ha_path)} | script_audio='{script_audio}' exists={os.path.exists(sa_path)}")
+            print(f"⚠️ Skipping item {item.get('counter')} — audio files missing (heal failed): headline_audio='{headline_audio}' exists={os.path.exists(ha_path)} | script_audio='{script_audio}' exists={os.path.exists(sa_path)}")
 
     # ── Dedup by counter: keep best media_type per counter (video > image > audio) ──
     # Same counter can have multiple rows (e.g., video + image for same report).
@@ -1792,6 +1891,41 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
                 _seen_counters[ctr] = item
     valid_items = list(_seen_counters.values())
     print(f"  [DEDUP] {len(valid_items)} unique items after counter dedup")
+
+    # ── Content dedup: the SAME report is often ingested 2-3× under different
+    # counters (re-enqueue / retry), so counter dedup alone lets the identical
+    # story appear multiple times in one bulletin. Collapse by content key
+    # (normalised original_text, fallback headline). Keep the best media_type,
+    # then the lowest counter for stability.
+    import re as _re
+
+    def _content_key(it: dict) -> str:
+        base = (it.get('original_text') or it.get('headline') or '').strip().lower()
+        base = _re.sub(r'\s+', ' ', base)          # collapse whitespace/newlines
+        base = _re.sub(r'[^\wఀ-౿ ]', '', base)  # keep alnum + Telugu block
+        return base[:80]
+
+    _seen_content: dict = {}
+    _content_dropped = 0
+    for item in valid_items:
+        k = _content_key(item)
+        if not k:
+            # no recoverable content → keep (can't safely dedup), unique key by counter
+            _seen_content[f"__nokey_{item.get('counter')}"] = item
+            continue
+        if k not in _seen_content:
+            _seen_content[k] = item
+        else:
+            _content_dropped += 1
+            prev = _seen_content[k]
+            prev_pri = _MEDIA_PRIORITY.get(prev.get('media_type', 'image'), 1)
+            this_pri = _MEDIA_PRIORITY.get(item.get('media_type', 'image'), 1)
+            if this_pri < prev_pri or (this_pri == prev_pri and
+                                       (item.get('counter') or 0) < (prev.get('counter') or 0)):
+                _seen_content[k] = item
+    valid_items = list(_seen_content.values())
+    if _content_dropped:
+        print(f"  [DEDUP] dropped {_content_dropped} duplicate-content item(s) → {len(valid_items)} unique stories")
 
     # ── Location filter ───────────────────────────────────────────────────────
     if location_id is not None:

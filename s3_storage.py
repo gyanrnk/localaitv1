@@ -204,8 +204,10 @@ def key_for_audio(filename: str) -> str:
     return f"{S3_PFX_AUDIOS}/{filename}"
 
 
-def key_for_item_cache(counter) -> str:
-    return f"{S3_PFX_CACHE}/item_{counter}_video.mp4"
+def key_for_item_cache(counter, media_type: str = 'video') -> str:
+    # media_type is part of the key because counters were historically assigned
+    # per-type, so item_{counter} alone could collide across image/video.
+    return f"{S3_PFX_CACHE}/item_{counter}_{media_type}.mp4"
 
 
 def key_for_bulletin_video(channel: str, bul_name: str) -> str:

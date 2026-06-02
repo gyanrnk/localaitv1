@@ -82,6 +82,17 @@ def _headline_fallback(script: str) -> str:
     return first_sentence or " ".join(text.split()[:8])
 
 
+def _looks_incomplete(h: str) -> bool:
+    """Detect an old broken headline: a single-line script-prefix fragment.
+    Good headlines are 2-line (contain a newline) and end on a verb."""
+    if not h or not h.strip():
+        return True
+    h = h.strip()
+    if "\n" in h:          # proper 2-line format = produced by the good path
+        return False
+    return len(h) <= 4 or len(h.split()) <= 6
+
+
 class NewsBot:
     """Main News Bot orchestrator"""
  
@@ -169,13 +180,19 @@ class NewsBot:
         # ── Step 2: Headline ─────────────────────────────────────────────────────
         _raw_headline = item.get('headline', '').strip()
         _llm = get_llm_handler(item.get('location_name', ''))
-        if _raw_headline:
+        if _raw_headline and not _looks_incomplete(_raw_headline):
+            # Stored headline already looks complete — just polish it.
             headline = _llm.review_headline(_raw_headline)
         else:
+            # Empty OR broken (script-prefix fragment) → regenerate fresh from script.
+            print(f"♻️ [REGEN] Stored headline incomplete/empty ({_raw_headline!r}) — regenerating from script")
             headline = _llm.generate_headline(script)
         if not headline or not headline.strip():
             print("⚠️ [REGEN] Headline empty after LLM — using first-sentence fallback")
             headline = _raw_headline or _headline_fallback(script)
+        headline = headline.strip()
+        # Did the headline actually change? If so we must regen audio + update DB.
+        _headline_changed = (headline != _raw_headline)
  
         # ── Step 3: TTS — missing audio files regenerate karo ────────────────────
         import tempfile, concurrent.futures
@@ -209,11 +226,20 @@ class NewsBot:
  
         intro_script    = item.get('intro_script', '')
         analysis_script = item.get('analysis_script', '')
- 
+
         # Agar intro/analysis text nahi hai toh smart split karo
         if not intro_script or not analysis_script:
             intro_script, analysis_script = _smart_split(script)
- 
+
+        # Headline text changed → stale headline audio must be regenerated.
+        # _gen_if_missing only regenerates MISSING files, so delete the old one.
+        if _headline_changed and ha_path and os.path.exists(ha_path):
+            try:
+                os.remove(ha_path)
+                print("🔁 [REGEN] Headline changed — old headline audio removed for regen")
+            except Exception as _e:
+                print(f"⚠️ [REGEN] Could not remove old headline audio: {_e}")
+
         tasks = [
             (script,          sa_path,       'script audio'),
             (headline,        ha_path,       'headline audio'),
@@ -264,14 +290,26 @@ class NewsBot:
         import db as _db_regen2
         _sd = _dur(sa_path) if os.path.exists(sa_path) else None
         _hd = _dur(ha_path) if os.path.exists(ha_path) else None
-        _db_regen2.execute("""
-            UPDATE news_items SET
-                status            = 'complete',
-                script_duration   = COALESCE(%s, script_duration),
-                headline_duration = COALESCE(%s, headline_duration)
-            WHERE counter = %s AND media_type = %s
-        """, (_sd, _hd, counter, media_type))
-        print(f"  [REGEN] ✅ Item {counter} regenerated successfully")
+        if _headline_changed:
+            # Persist the repaired headline text too, so the card + ticker pick it up.
+            _db_regen2.execute("""
+                UPDATE news_items SET
+                    status            = 'complete',
+                    headline          = %s,
+                    script_duration   = COALESCE(%s, script_duration),
+                    headline_duration = COALESCE(%s, headline_duration)
+                WHERE counter = %s AND media_type = %s
+            """, (headline, _sd, _hd, counter, media_type))
+            print(f"  [REGEN] ✅ Item {counter} regenerated — headline repaired: {headline!r}")
+        else:
+            _db_regen2.execute("""
+                UPDATE news_items SET
+                    status            = 'complete',
+                    script_duration   = COALESCE(%s, script_duration),
+                    headline_duration = COALESCE(%s, headline_duration)
+                WHERE counter = %s AND media_type = %s
+            """, (_sd, _hd, counter, media_type))
+            print(f"  [REGEN] ✅ Item {counter} regenerated successfully")
         return True
  
     def _extract_audio_from_video(self, video_path: str) -> Optional[str]:
