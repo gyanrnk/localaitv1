@@ -583,23 +583,18 @@ _SYSTEM_FONT_SUBSTITUTES = {
 }
 
 def ensure_assets():
-    """Download missing static assets from S3. Skips files that already exist locally
-    or whose system-font substitutes are present (avoids redundant font downloads)."""
+    """Sync static assets from S3 (S3 = source of truth).
+
+    Downloads MISSING assets, AND re-downloads any local file whose size differs
+    from S3 — this self-heals a wrong/stale asset that the old 'download only if
+    missing' logic never fixed (e.g. a wrong intro4.mp4 left in the VPS volume
+    that made Kurnool show Nalgonda's intro). System-font substitutes are still
+    honoured; fonts themselves are not size-checked (stable + large)."""
     import boto3
     from botocore.config import Config as _BotoConfig
 
-    def _needs_download(asset: str) -> bool:
-        if os.path.exists(os.path.join(BASE_DIR, asset)):
-            return False
-        fname = os.path.basename(asset)
-        for sys_path in _SYSTEM_FONT_SUBSTITUTES.get(fname, []):
-            if os.path.exists(sys_path):
-                return False  # system font available — local copy not needed
-        return True
-
-    missing = [a for a in _STATIC_ASSETS if _needs_download(a)]
-    if not missing:
-        return
+    if not S3_BUCKET_NAME:
+        return  # S3 not configured — nothing to sync
 
     _cfg = _BotoConfig(
         request_checksum_calculation='when_required',
@@ -609,7 +604,35 @@ def ensure_assets():
                       aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
                       aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
                       config=_cfg)
-    for asset in missing:
+
+    def _s3_size(s3_key: str):
+        try:
+            return int(s3.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)['ContentLength'])
+        except Exception:
+            return None  # not in S3 / error — leave the local copy untouched
+
+    def _needs_download(asset: str) -> bool:
+        local_path = os.path.join(BASE_DIR, asset)
+        if not os.path.exists(local_path):
+            fname = os.path.basename(asset)
+            for sys_path in _SYSTEM_FONT_SUBSTITUTES.get(fname, []):
+                if os.path.exists(sys_path):
+                    return False  # system font available — local copy not needed
+            return True  # genuinely missing
+        # Exists locally — self-heal if it doesn't match S3 (skip fonts).
+        if asset.lower().endswith(('.ttf', '.otf')):
+            return False
+        remote = _s3_size(f"{S3_STATIC_PREFIX}/{asset}")
+        if remote is not None and remote != os.path.getsize(local_path):
+            print(f"[assets] 🔄 Stale (local {os.path.getsize(local_path)}B != S3 {remote}B) — refreshing: {asset}")
+            return True
+        return False
+
+    to_get = [a for a in _STATIC_ASSETS if _needs_download(a)]
+    if not to_get:
+        return
+
+    for asset in to_get:
         local_path = os.path.join(BASE_DIR, asset)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         s3_key = f"{S3_STATIC_PREFIX}/{asset}"
