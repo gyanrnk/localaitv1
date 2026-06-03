@@ -64,12 +64,13 @@ services:
       - TICKER_ENABLED=${TICKER_ENABLED:-true}
       - BGM_ENABLED=${BGM_ENABLED:-true}
     volumes:
-      # Local storage
+      # Local storage — assets MUST be writable so ensure_assets() can sync
+      # from S3 (anchors folder, stale-asset self-heal). The earlier duplicate
+      # ':ro' mount made /app/assets read-only (last mount wins) → ensure_assets
+      # crashed on startup (Read-only file system).
       - ./assets:/app/assets
       - ./inputs:/app/inputs
       - ./outputs:/app/outputs
-      # Static assets
-      - ./assets:/app/assets:ro
       - ./news_intro.mpeg:/app/news_intro.mpeg:ro
     networks:
       - localaitv_network

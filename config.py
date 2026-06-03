@@ -654,6 +654,15 @@ def ensure_assets():
         # Exists locally — self-heal if it doesn't match S3 (skip fonts).
         if asset.lower().endswith(('.ttf', '.otf')):
             return False
+        # Skip the size-check self-heal for LARGE media (notebooklm, big videos):
+        # only fetch if MISSING. Avoids re-pulling 100s of MB every startup when
+        # the local copy merely differs from S3 (the self-heal is for small,
+        # wrong-upload cases like intro4.mp4, not multi-hundred-MB files).
+        try:
+            if os.path.getsize(local_path) > 50 * 1024 * 1024:
+                return False
+        except OSError:
+            return False
         remote = _s3_size(f"{S3_STATIC_PREFIX}/{asset}")
         if remote is not None and remote != os.path.getsize(local_path):
             print(f"[assets] 🔄 Stale (local {os.path.getsize(local_path)}B != S3 {remote}B) — refreshing: {asset}")
@@ -673,10 +682,10 @@ def ensure_assets():
     # ── Folder mirrors: download EVERY object under each S3 folder prefix ──────
     # (variable-count pools like anchors — add files in S3, no code change)
     for folder in _S3_SYNC_FOLDERS:
-        prefix = f"{S3_STATIC_PREFIX}/{folder}/"
-        local_dir = os.path.join(BASE_DIR, folder)
-        os.makedirs(local_dir, exist_ok=True)
         try:
+            prefix = f"{S3_STATIC_PREFIX}/{folder}/"
+            local_dir = os.path.join(BASE_DIR, folder)
+            os.makedirs(local_dir, exist_ok=True)   # read-only FS → caught below, no crash
             paginator = s3.get_paginator('list_objects_v2')
             for page in paginator.paginate(Bucket=S3_BUCKET_NAME, Prefix=prefix):
                 for obj in page.get('Contents', []):
