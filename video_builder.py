@@ -973,8 +973,10 @@ def build_headline_card(headline_text: str, audio_path: str, out_path: str,
             else:
                 media_inputs = ['-stream_loop', '-1', '-t', str(duration), '-i', media_path]
  
-            # LEFT_X, LEFT_Y, LEFT_W, LEFT_H = 100, 86, 682, 723
-            LEFT_X, LEFT_Y, LEFT_W, LEFT_H = 133, 77, 653, 730
+            # Black media-window of template4.mp4 (measured @1920x1080): the media
+            # must fill this exactly, else the white frame shows as a gap/border.
+            # Old values (133,77,653,730) were offset + too small → left/right/bottom gaps.
+            LEFT_X, LEFT_Y, LEFT_W, LEFT_H = 69, 74, 701, 797
  
             cmd = [
                 'ffmpeg', '-y',
