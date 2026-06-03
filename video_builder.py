@@ -894,8 +894,21 @@ html, body {{ width:{width}px; height:{height}px; background:rgba(0,0,0,0); }}
             extra_http_headers={"Content-Type": "text/html; charset=utf-8"}
         )
         try:
-            page.goto(f"file:///{html_file}", wait_until="networkidle")
-            page.screenshot(path=overlay_png, omit_background=True)
+            page.set_default_timeout(15000)
+            # Static local file — "load" sufficient (networkidle kabhi-kabhi hang
+            # hota hai). 3 retries taaki transient timeout pe card blank na ho.
+            _last_err = None
+            for _att in range(3):
+                try:
+                    page.goto(f"file:///{html_file}", wait_until="load")
+                    page.screenshot(path=overlay_png, omit_background=True, timeout=15000)
+                    _last_err = None
+                    break
+                except Exception as _se:
+                    _last_err = _se
+                    print(f"  ⚠️ overlay screenshot attempt {_att+1}/3 failed: {_se}")
+            if _last_err is not None:
+                raise _last_err
         finally:
             page.close()
  
@@ -999,7 +1012,41 @@ def build_headline_card(headline_text: str, audio_path: str, out_path: str,
             _result = _run(cmd, f'Headline+Media: {headline_text[:40]}')
             log.info(f"[HL-TIMER] END | elapsed={_t.time()-_t_start:.2f}s | text={headline_text[:40]}")
             return _result
- 
+
+        # ── Media only (text overlay fail hua par media available) ────────────
+        # overlay_png missing (e.g. Playwright hiccup) → text skip karo PAR media
+        # zaroor dikhao, warna card poora blank (black+red) ban jaata hai. Prod
+        # Linux pe overlay normally banta hai; ye sirf safety-net hai.
+        elif has_media:
+            media_ext    = Path(media_path).suffix.lower()
+            is_img_media = media_ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+            if is_img_media:
+                media_inputs = ['-loop', '1', '-t', str(duration), '-i', media_path]
+            else:
+                media_inputs = ['-stream_loop', '-1', '-t', str(duration), '-i', media_path]
+
+            LEFT_X, LEFT_Y, LEFT_W, LEFT_H = 69, 74, 701, 797
+            cmd = [
+                'ffmpeg', '-y',
+                *bg_inputs,            # [0] template/bg
+                *media_inputs,         # [1] news media
+                '-i', audio_path,      # [2] audio
+                '-filter_complex',
+                f'[0:v]{bg_vf}[bg];'
+                f'[1:v]scale={LEFT_W}:{LEFT_H}:force_original_aspect_ratio=increase,'
+                f'crop={LEFT_W}:{LEFT_H}:(iw-ow)/2:(ih-oh)/2,'
+                f'fps={FPS},setpts=PTS-STARTPTS[media_scaled];'
+                f'[bg][media_scaled]overlay=x={LEFT_X}:y={LEFT_Y},'
+                f'fps={FPS},format=yuv420p,setpts=PTS-STARTPTS[outv]',
+                '-map', '[outv]', '-map', '2:a',
+                '-af', 'asetpts=PTS-STARTPTS',
+                *out_flags
+            ]
+            print(f"  🎬 Headline card (media-only, text overlay missing): {os.path.basename(media_path)}")
+            _result = _run(cmd, f'Headline+Media(no-text): {headline_text[:40]}')
+            log.info(f"[HL-TIMER] END | elapsed={_t.time()-_t_start:.2f}s | text={headline_text[:40]}")
+            return _result
+
         # ── Text-only overlay (no media) ──────────────────────────────────────
         elif overlay_png and os.path.exists(overlay_png):
             cmd = [
