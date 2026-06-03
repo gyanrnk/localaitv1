@@ -644,30 +644,19 @@ def ensure_assets():
             return None  # not in S3 / error — leave the local copy untouched
 
     def _needs_download(asset: str) -> bool:
+        # Download ONLY if missing. The VPS asset volume is operator-managed
+        # (scp'd) and is the source of truth; S3 copies can be stale (e.g. an old
+        # white ticker4.png). A size-mismatch "self-heal" that pulls from S3 would
+        # OVERWRITE a correct local asset with a stale S3 one — so we never
+        # overwrite an existing file here.
         local_path = os.path.join(BASE_DIR, asset)
-        if not os.path.exists(local_path):
-            fname = os.path.basename(asset)
-            for sys_path in _SYSTEM_FONT_SUBSTITUTES.get(fname, []):
-                if os.path.exists(sys_path):
-                    return False  # system font available — local copy not needed
-            return True  # genuinely missing
-        # Exists locally — self-heal if it doesn't match S3 (skip fonts).
-        if asset.lower().endswith(('.ttf', '.otf')):
+        if os.path.exists(local_path):
             return False
-        # Skip the size-check self-heal for LARGE media (notebooklm, big videos):
-        # only fetch if MISSING. Avoids re-pulling 100s of MB every startup when
-        # the local copy merely differs from S3 (the self-heal is for small,
-        # wrong-upload cases like intro4.mp4, not multi-hundred-MB files).
-        try:
-            if os.path.getsize(local_path) > 50 * 1024 * 1024:
-                return False
-        except OSError:
-            return False
-        remote = _s3_size(f"{S3_STATIC_PREFIX}/{asset}")
-        if remote is not None and remote != os.path.getsize(local_path):
-            print(f"[assets] 🔄 Stale (local {os.path.getsize(local_path)}B != S3 {remote}B) — refreshing: {asset}")
-            return True
-        return False
+        fname = os.path.basename(asset)
+        for sys_path in _SYSTEM_FONT_SUBSTITUTES.get(fname, []):
+            if os.path.exists(sys_path):
+                return False  # system font available — local copy not needed
+        return True  # genuinely missing
 
     for asset in [a for a in _STATIC_ASSETS if _needs_download(a)]:
         local_path = os.path.join(BASE_DIR, asset)
