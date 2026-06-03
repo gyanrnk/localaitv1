@@ -2076,13 +2076,26 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
     if not valid_items:
         return None
  
-    # ── target_seconds: total - injections (bulletin_builder ne manifest mein save kiya hai) ──
+    # ── Ending anchor pehle hi pick kar lo — taaki uski duration ko news budget
+    #    se reserve kar sakein (warna bulletin 10-min se overshoot hoga). Welcome
+    #    anchor self-reserve hota hai (woh news loop se pehle all_segments mein
+    #    add hota hai → 'running' usse start hota hai). Ending anchor news loop ke
+    #    BAAD add hota hai, isliye yahan explicitly minus karna padta hai.
+    from config import get_ending_anchor_clip as _get_end_anchor
+    _end_anchor_src = _get_end_anchor(BASE_DIR)
+    _end_anchor_dur = 0.0
+    if _end_anchor_src and os.path.exists(_end_anchor_src):
+        _end_anchor_dur = _video_duration(_end_anchor_src)
+        print(f"  🎙️ Ending anchor reserved: {os.path.basename(_end_anchor_src)} ({_end_anchor_dur:.1f}s)")
+
+    # ── target_seconds: total - injections - ending_anchor (bulletin_builder ne manifest mein save kiya hai) ──
     _inject_items  = [it for it in items if it.get('type') == 'injection']
     _inject_total  = sum(it.get('duration', 0.0) for it in _inject_items)
-    news_target_seconds  = duration_min * 60 - _inject_total   # news loop ke liye
+    news_target_seconds  = duration_min * 60 - _inject_total - _end_anchor_dur   # news loop ke liye
     total_target_seconds = duration_min * 60                    # filler ke liye
     target_seconds       = news_target_seconds                  # existing code same rehta hai
-    print(f"  [TARGET] total={total_target_seconds}s | injections={_inject_total:.1f}s → news_target={news_target_seconds:.1f}s")
+    print(f"  [TARGET] total={total_target_seconds}s | injections={_inject_total:.1f}s | "
+          f"ending_anchor={_end_anchor_dur:.1f}s → news_target={news_target_seconds:.1f}s")
  
     per_script_cap = None
     all_segments: List[str] = []
@@ -2753,7 +2766,32 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
     all_segments = _pre_news_segs + _rebuilt_news
     print(f"  [INJECT] Done — {len(injection_skip_ranges)} injection ranges for ticker")
     # ─────────────────────────────────────────────────────────────────────────
- 
+
+    # ── Ending Anchor (… News → Injections → Ending Anchor → Filler) ───────────
+    # Random clip from assets/anchors_end/ (shared pool), welcome anchor jaisa hi
+    # normalise hota hai. Iski duration upar news_target se reserve ki gayi hai,
+    # to total ≈ 10-min hi rehta hai. Missing/empty folder → gracefully skip.
+    if _end_anchor_src and os.path.exists(_end_anchor_src):
+        end_anchor_seg = os.path.join(segments_dir, f'{str(seg_idx).zfill(3)}_anchor_end.mp4')
+        seg_idx += 1
+        _end_anchor_ok = _run([
+            'ffmpeg', '-y', '-i', _end_anchor_src,
+            '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,'
+                   'pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1',
+            '-r', '25', '-c:v', 'libx264', '-preset', 'veryfast',
+            '-b:v', '4000k', '-maxrate', '4000k', '-bufsize', '8000k',
+            '-g', '50', '-keyint_min', '50', '-sc_threshold', '0',
+            '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '44100', '-ac', '2',
+            '-video_track_timescale', '12800', '-movflags', '+faststart',
+            end_anchor_seg
+        ], f'Ending anchor ({os.path.basename(_end_anchor_src)})')
+        if _end_anchor_ok and os.path.exists(end_anchor_seg):
+            all_segments.append(end_anchor_seg)
+            print(f"  🎙️ Ending anchor added: {os.path.basename(_end_anchor_src)}")
+        else:
+            print(f"  ⚠️ Ending anchor encode failed — skipping")
+    # ─────────────────────────────────────────────────────────────────────────
+
     # ── [4/4] Filler ─────────────────────────────────────────────────────────
     log.info(f"[CHECKPOINT-4] News+injections done | total_segments={len(all_segments)}")
     actual_so_far    = sum(_video_duration(seg) for seg in all_segments)
@@ -2763,15 +2801,20 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
  
     print(f"\n[4/4] Filler ({filler_duration:.1f}s)...")
  
-    if filler_duration > 0.5:
-        filler_seg = os.path.join(segments_dir, f'{str(seg_idx).zfill(3)}_filler.mp4')
-        if build_filler_segment(filler_png, filler_duration, filler_seg):
-            all_segments.append(filler_seg)
-    elif filler_duration < -0.5:
-        # Atempo drift se actual > target hua — trim mat karo, as-is accept karo
-        print(f"  ⚠️  Actual content ({actual_so_far:.1f}s) slightly over target ({total_target_seconds}s) — accepting as-is")
- 
-        filler_start_time = None  # BGM boost nahi hoga
+    # ── Ending me hamesha chhota 3-5s filler buffer (outro) ───────────────────
+    # Content 10-min target tak fill ho gaya to residual chhota hoga; phir bhi
+    # ek clean 3-5s tail filler chahiye. Agar atempo drift se content target se
+    # thoda over bhi ho jaaye, tab bhi minimum tail filler add karenge.
+    MIN_TAIL_FILLER = 3.5
+    if filler_duration < MIN_TAIL_FILLER:
+        if filler_duration < -0.5:
+            print(f"  ⚠️  Actual content ({actual_so_far:.1f}s) target ({total_target_seconds}s) se over — "
+                  f"phir bhi {MIN_TAIL_FILLER:.1f}s tail filler add kar rahe hain")
+        filler_duration = MIN_TAIL_FILLER
+
+    filler_seg = os.path.join(segments_dir, f'{str(seg_idx).zfill(3)}_filler.mp4')
+    if build_filler_segment(filler_png, filler_duration, filler_seg):
+        all_segments.append(filler_seg)
  
     if not all_segments:
         return None

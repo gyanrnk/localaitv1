@@ -96,6 +96,41 @@ def get_anchor_clip(base_dir: str = None) -> str:
     return random.choice(clips)
 
 
+def get_ending_anchor_clip(base_dir: str = None) -> str:
+    """Pick a RANDOM 'ending anchor' clip from assets/anchors_end/ (shared pool).
+
+    Played at the END of the bulletin — after the last news/injection, just
+    before the short tail filler (… News → Injections → Ending Anchor → Filler).
+    Returns '' if the folder is empty/missing — the caller then skips the ending
+    anchor segment gracefully (and reserves no budget for it).
+
+    File convention: assets/anchors_end/anchor_end1.mp4, anchor_end2.mp4, ...
+    """
+    import glob, random
+    _base = base_dir or BASE_DIR
+    clips = sorted(glob.glob(os.path.join(_base, 'assets', 'anchors_end', '*.mp4')))
+    if not clips:
+        return ''
+    return random.choice(clips)
+
+
+def get_ending_anchor_clip(base_dir: str = None) -> str:
+    """Pick a RANDOM 'ending anchor' clip from assets/anchors_end/ (shared pool).
+
+    Played at the END of the bulletin, right before the outro filler
+    (… News → Injections → Ending Anchor → Filler). Returns '' if the folder
+    is empty/missing — the caller then skips the ending anchor gracefully.
+
+    File convention: assets/anchors_end/anchor_end1.mp4, anchor_end2.mp4, ...
+    """
+    import glob, random
+    _base = base_dir or BASE_DIR
+    clips = sorted(glob.glob(os.path.join(_base, 'assets', 'anchors_end', '*.mp4')))
+    if not clips:
+        return ''
+    return random.choice(clips)
+
+
 def get_channel_tts_provider(channel_name: str) -> str:
     """
     Returns 'sarvam' or 'gcp' for the given channel.
@@ -610,7 +645,8 @@ _SYSTEM_FONT_SUBSTITUTES = {
 #   S3:    static-assets/assets/anchors/anchor1.mp4, anchor2.mp4, ...
 #   Local: assets/anchors/anchor1.mp4, anchor2.mp4, ...
 _S3_SYNC_FOLDERS = [
-    'assets/anchors',
+    'assets/anchors',       # welcome anchor pool (intro ke baad)
+    'assets/anchors_end',   # ending anchor pool (news ke baad, filler se pehle)
 ]
 
 

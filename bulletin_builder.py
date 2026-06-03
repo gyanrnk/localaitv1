@@ -1943,16 +1943,28 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         print("❌ No valid items with audio files found")
         return None
 
-    # ranked    = rank_news_items(valid_items)
-    # Pending-first: agar enough unused items hain to old skip
+    # ── Item selection: fresh pehle, OLD items backfill ke liye ───────────────
+    # Sirf fresh (unused) items se 10-min bharna possible nahi hota jab kam reports
+    # aaye ho (e.g. sirf 1 item). Isliye fresh ko rank me pehle rakho aur OLD
+    # (already-used) items ko backfill candidate banao. Greedy selection budget
+    # tak hi consume karta hai, to old items SIRF tab select honge jab fresh items
+    # 10-min news budget poora na kar paaye — warna old skipped reh jaate hain.
     unused_items = [x for x in valid_items if x.get('used_count', 0) == 0]
+    old_items    = [x for x in valid_items if x.get('used_count', 0) > 0]
 
-    if not unused_items:
-        print("❌ No new (unused) items available — skipping bulletin build")
+    if not unused_items and not old_items:
+        print("❌ No items available (fresh or old) — skipping bulletin build")
         return None
 
-    ranked = rank_news_items(unused_items)
-    print(f"  [RANK] {len(unused_items)} new items only — old items excluded")
+    # Fresh pehle (rank order), phir old least-used-first (rank old ko bhi
+    # used_count ascending sort karta hai) → backfill order
+    ranked = rank_news_items(unused_items) + rank_news_items(old_items)
+    if unused_items:
+        print(f"  [RANK] {len(unused_items)} fresh + {len(old_items)} old (backfill) "
+              f"— greedy news budget (≈10-min) tak fill karega")
+    else:
+        print(f"  [RANK] No fresh items — building from {len(old_items)} old items "
+              f"(backfill) to keep the stream alive")
 
     intro_dur = INTRO_VIDEO_DURATION
 
@@ -2145,6 +2157,11 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         import db as _db
         skipped_counters = []
         for item in skipped:
+            # Old (already-used) backfill items skip hue to unhe next_bulletin
+            # flag mat lagao — wo carry-forward ke liye nahi hain, sirf fresh
+            # unaired items ko hi next bulletin me priority deni hai.
+            if item.get('used_count', 0) > 0:
+                continue
             ctr = item.get('counter')
             print(f"  ↪  Item {ctr} | dur={item.get('total_duration', 0):.2f}s")
             if ctr is not None:
