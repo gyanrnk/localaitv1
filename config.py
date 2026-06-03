@@ -644,19 +644,31 @@ def ensure_assets():
             return None  # not in S3 / error — leave the local copy untouched
 
     def _needs_download(asset: str) -> bool:
-        # Download ONLY if missing. The VPS asset volume is operator-managed
-        # (scp'd) and is the source of truth; S3 copies can be stale (e.g. an old
-        # white ticker4.png). A size-mismatch "self-heal" that pulls from S3 would
-        # OVERWRITE a correct local asset with a stale S3 one — so we never
-        # overwrite an existing file here.
+        # Download if MISSING, or if the S3 object is NEWER than the local copy
+        # (i.e. an operator just uploaded an updated asset to S3). A stale/older
+        # S3 copy NEVER overwrites a newer local file — this is what protects a
+        # correct, scp'd VPS asset from being clobbered by an old S3 version
+        # (the white ticker4.png disaster), while still letting fresh S3 uploads
+        # propagate to the VPS automatically.
         local_path = os.path.join(BASE_DIR, asset)
-        if os.path.exists(local_path):
-            return False
-        fname = os.path.basename(asset)
-        for sys_path in _SYSTEM_FONT_SUBSTITUTES.get(fname, []):
-            if os.path.exists(sys_path):
-                return False  # system font available — local copy not needed
-        return True  # genuinely missing
+        if not os.path.exists(local_path):
+            fname = os.path.basename(asset)
+            for sys_path in _SYSTEM_FONT_SUBSTITUTES.get(fname, []):
+                if os.path.exists(sys_path):
+                    return False  # system font available — local copy not needed
+            return True  # genuinely missing
+        if asset.lower().endswith(('.ttf', '.otf')):
+            return False  # fonts are stable — never refresh
+        # Refresh only when S3 is newer than local (operator pushed an update).
+        try:
+            head = s3.head_object(Bucket=S3_BUCKET_NAME, Key=f"{S3_STATIC_PREFIX}/{asset}")
+            s3_mtime = head['LastModified'].timestamp()
+            if s3_mtime > os.path.getmtime(local_path) + 2:  # 2s tolerance
+                print(f"[assets] 🔄 S3 newer → refreshing: {asset}")
+                return True
+        except Exception:
+            pass  # S3 missing/unreachable → keep the local copy
+        return False
 
     for asset in [a for a in _STATIC_ASSETS if _needs_download(a)]:
         local_path = os.path.join(BASE_DIR, asset)
