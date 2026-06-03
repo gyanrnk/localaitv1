@@ -2076,17 +2076,20 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
     if not valid_items:
         return None
  
-    # ── Ending anchor pehle hi pick kar lo — taaki uski duration ko news budget
-    #    se reserve kar sakein (warna bulletin 10-min se overshoot hoga). Welcome
-    #    anchor self-reserve hota hai (woh news loop se pehle all_segments mein
-    #    add hota hai → 'running' usse start hota hai). Ending anchor news loop ke
-    #    BAAD add hota hai, isliye yahan explicitly minus karna padta hai.
-    from config import get_ending_anchor_clip as _get_end_anchor
-    _end_anchor_src = _get_end_anchor(BASE_DIR)
+    # ── Anchor PAIR pehle hi pick kar lo (Manual §13: opening & closing anchor
+    #    SAME person). get_anchor_pair index se match karta hai —
+    #    anchor{N}.mp4 ↔ anchor_end{N}.mp4. Ending ki duration ko news budget se
+    #    reserve karna padta hai (warna 10-min se overshoot). Welcome self-reserve
+    #    hota hai (news loop se pehle all_segments mein add → 'running' usse start).
+    from config import get_anchor_pair as _get_anchor_pair
+    _anchor_src, _end_anchor_src = _get_anchor_pair(BASE_DIR)
     _end_anchor_dur = 0.0
     if _end_anchor_src and os.path.exists(_end_anchor_src):
         _end_anchor_dur = _video_duration(_end_anchor_src)
-        print(f"  🎙️ Ending anchor reserved: {os.path.basename(_end_anchor_src)} ({_end_anchor_dur:.1f}s)")
+        print(f"  🎙️ Anchor pair: welcome={os.path.basename(_anchor_src) if _anchor_src else '—'} "
+              f"+ ending={os.path.basename(_end_anchor_src)} (same person, {_end_anchor_dur:.1f}s reserved)")
+    elif _anchor_src:
+        print(f"  🎙️ Welcome anchor={os.path.basename(_anchor_src)} (no matching ending — closing anchor skipped)")
 
     # ── target_seconds: total - injections - ending_anchor (bulletin_builder ne manifest mein save kiya hai) ──
     _inject_items  = [it for it in items if it.get('type') == 'injection']
@@ -2111,10 +2114,8 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
     log.info(f"[CHECKPOINT-2] Intro built | seg={intro_seg} | dur={_video_duration(intro_seg):.2f}s")
 
     # ── Welcome Anchor (Manual §8: Channel Intro → Welcome Anchor → Headlines) ──
-    # Random clip from assets/anchors/ (shared pool), normalised to the bulletin
-    # format. Missing/empty folder → skipped gracefully.
-    from config import get_anchor_clip as _get_anchor
-    _anchor_src = _get_anchor(BASE_DIR)
+    # _anchor_src upar get_anchor_pair() se pehle hi pick ho chuka hai (ending
+    # anchor ke SAME person — Manual §13). Normalise + insert. Missing → skip.
     if _anchor_src and os.path.exists(_anchor_src):
         anchor_seg = os.path.join(segments_dir, f'{str(seg_idx).zfill(3)}_anchor.mp4')
         seg_idx += 1

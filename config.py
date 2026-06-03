@@ -114,6 +114,55 @@ def get_ending_anchor_clip(base_dir: str = None) -> str:
     return random.choice(clips)
 
 
+def get_anchor_pair(base_dir: str = None):
+    """Return a (welcome, ending) anchor clip PAIR for the SAME person.
+
+    Manual v2 §13: "Opening anchor and closing anchor must be the same person."
+    Pairing is by the index in the filename — assets/anchors/anchor{N}.mp4 is the
+    SAME person as assets/anchors_end/anchor_end{N}.mp4. We pick a random N for
+    which BOTH a welcome clip and a matching ending clip exist, so opening and
+    closing are always the same anchor.
+
+    Graceful fallbacks (so a bulletin never crashes over anchors):
+      - No matching ending for any welcome → (welcome, '')  [ending skipped;
+        we never pair mismatched people, that would violate §13]
+      - No welcome clips at all            → ('', '')
+
+    Returns (welcome_path, ending_path); '' for a missing side.
+
+    File convention (operator MUST keep indices aligned per person):
+      assets/anchors/anchor1.mp4      ↔ assets/anchors_end/anchor_end1.mp4
+      assets/anchors/anchor2.mp4      ↔ assets/anchors_end/anchor_end2.mp4
+    """
+    import glob, random, re
+    _base = base_dir or BASE_DIR
+    welcome_clips = sorted(glob.glob(os.path.join(_base, 'assets', 'anchors',     '*.mp4')))
+    ending_clips  = sorted(glob.glob(os.path.join(_base, 'assets', 'anchors_end', '*.mp4')))
+
+    def _idx(path: str):
+        m = re.search(r'(\d+)', os.path.basename(path))
+        return m.group(1) if m else None
+
+    if not welcome_clips:
+        return ('', '')
+
+    ending_by_idx = {}
+    for e in ending_clips:
+        k = _idx(e)
+        if k is not None and k not in ending_by_idx:
+            ending_by_idx[k] = e
+
+    # Indices jinke liye dono (welcome + matching ending) maujood hain
+    paired = [w for w in welcome_clips if _idx(w) in ending_by_idx]
+    if paired:
+        w = random.choice(paired)
+        return (w, ending_by_idx[_idx(w)])
+
+    # Koi matching ending nahi mila → §13 violate na ho, isliye sirf welcome
+    # (closing anchor skip — mismatched person kabhi pair nahi karenge)
+    return (random.choice(welcome_clips), '')
+
+
 def get_ending_anchor_clip(base_dir: str = None) -> str:
     """Pick a RANDOM 'ending anchor' clip from assets/anchors_end/ (shared pool).
 
