@@ -315,6 +315,11 @@ def _build_headline_html(headlines: list, font_size: int,
 {font_face}
 * {{margin:0;padding:0;}}
 html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});overflow:hidden;}}
+/* Explicit painted bg element — headless Chromium in Docker often ignores the
+   page/body background in screenshots (renders white), which made the white
+   headline text invisible on the VPS. A painted div is captured reliably. */
+.bg {{position:fixed;top:0;left:0;width:100%;height:100%;
+      background:rgb({bg_r},{bg_g},{bg_b});z-index:0;}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
@@ -325,7 +330,7 @@ html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b
     position:relative;z-index:1;
 }}
 </style>
-</head><body><div class="t">{full_content}</div></body></html>"""
+</head><body><div class="bg"></div><div class="t">{full_content}</div></body></html>"""
 
 
 def _build_ad_html(ad_text: str, font_size: int,
@@ -351,6 +356,9 @@ def _build_ad_html(ad_text: str, font_size: int,
 {font_face}
 * {{margin:0;padding:0;}}
 html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b});overflow:hidden;}}
+/* Explicit painted bg element (headless Chromium Docker ignores page bg). */
+.bg {{position:fixed;top:0;left:0;width:100%;height:100%;
+      background:rgb({bg_r},{bg_g},{bg_b});z-index:0;}}
 .t {{
     font-family:'Noto Sans Telugu','Nirmala UI',sans-serif;
     font-size:{font_size}px; font-weight:600;
@@ -360,7 +368,7 @@ html,body {{width:{est_w}px;height:{band_h}px;background:rgb({bg_r},{bg_g},{bg_b
     position:relative;z-index:1;
 }}
 </style>
-</head><body><div class="t">{full_content}</div></body></html>"""
+</head><body><div class="bg"></div><div class="t">{full_content}</div></body></html>"""
 
 
 # ── Strip renderer ────────────────────────────────────────────────────────────
