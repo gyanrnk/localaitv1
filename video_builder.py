@@ -2094,6 +2094,34 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
         return None
     all_segments.append(intro_seg)
     log.info(f"[CHECKPOINT-2] Intro built | seg={intro_seg} | dur={_video_duration(intro_seg):.2f}s")
+
+    # ── Welcome Anchor (Manual §8: Channel Intro → Welcome Anchor → Headlines) ──
+    # Random clip from assets/anchors/ (shared pool), normalised to the bulletin
+    # format. Missing/empty folder → skipped gracefully.
+    from config import get_anchor_clip as _get_anchor
+    _anchor_src = _get_anchor(BASE_DIR)
+    if _anchor_src and os.path.exists(_anchor_src):
+        anchor_seg = os.path.join(segments_dir, f'{str(seg_idx).zfill(3)}_anchor.mp4')
+        seg_idx += 1
+        _anchor_ok = _run([
+            'ffmpeg', '-y', '-i', _anchor_src,
+            '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,'
+                   'pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1',
+            '-r', '25', '-c:v', 'libx264', '-preset', 'veryfast',
+            '-b:v', '4000k', '-maxrate', '4000k', '-bufsize', '8000k',
+            '-g', '50', '-keyint_min', '50', '-sc_threshold', '0',
+            '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '44100', '-ac', '2',
+            '-video_track_timescale', '12800', '-movflags', '+faststart',
+            anchor_seg
+        ], f'Welcome anchor ({os.path.basename(_anchor_src)})')
+        if _anchor_ok and os.path.exists(anchor_seg):
+            all_segments.append(anchor_seg)
+            print(f"  🎙️ Welcome anchor added: {os.path.basename(_anchor_src)}")
+        else:
+            print(f"  ⚠️ Welcome anchor encode failed — skipping")
+    else:
+        print(f"  ℹ️ No anchor clips in assets/anchors/ — skipping welcome anchor")
+
     from config import get_channel_cap1_path as _get_cap1
     filler_png  = os.path.join(BASE_DIR, 'assets', 'filler.mp4')
     break_video = os.path.join(BASE_DIR, 'assets', 'break.mp4')

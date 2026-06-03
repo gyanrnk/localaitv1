@@ -1958,10 +1958,18 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
     # ── Pre-fetch WhoisWho (S3) + Ad clips (S3 + local assets/ads1) ─────────
     from s3_bulletin_fetcher import fetch_whoiswho_bulletin, fetch_ad_clips, fetch_local_ad_clips
+    from config import ADS_ENABLED
 
     _whoiswho_clip  = fetch_whoiswho_bulletin()          # S3 se 1-min clip
-    _s3_ads         = fetch_ad_clips()                   # S3 se ads
-    _local_ads      = fetch_local_ad_clips()             # assets/ads1/ se local ads
+
+    if ADS_ENABLED:
+        _s3_ads    = fetch_ad_clips()
+        _local_ads = fetch_local_ad_clips()
+    else:
+        _s3_ads    = []
+        _local_ads = []
+        print("  [ADS] ADS_ENABLED=false — skipping ad fetch")
+
     import random as _rand_ads
     _combined_ads   = _s3_ads + [a for a in _local_ads if a not in _s3_ads]
     _rand_ads.shuffle(_combined_ads)

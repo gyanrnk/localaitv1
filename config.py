@@ -12,7 +12,11 @@ OPENAI_MODEL          = os.getenv('OPENAI_MODEL', 'gpt-4o')
 OPENAI_HEADLINE_MODEL = os.getenv('OPENAI_HEADLINE_MODEL', 'gpt-4o-mini')
 OPENAI_WHISPER_MODEL  = os.getenv('OPENAI_WHISPER_MODEL', 'gpt-4o-transcribe')
 GEMINI_API_KEY        = os.getenv('GEMINI_API_KEY', '')
-GEMINI_MODEL          = os.getenv('GEMINI_MODEL', 'gemini-2.5-pro')
+# NOTE: gemini-2.5-PRO is a heavy "thinking" model — on the OpenAI-compat
+# endpoint its reasoning tokens are counted inside max_tokens, so script/headline
+# calls (max_tokens 80-2000) return EMPTY with finish_reason=length. Use a flash
+# model (minimal thinking) for fast text gen. Overridable via .env GEMINI_MODEL.
+GEMINI_MODEL          = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
 SARVAM_API_KEY        = os.getenv('SARVAM_API_KEY', '')
 MAX_TTS_CONCURRENCY  = int(os.getenv('MAX_TTS_CONCURRENCY', '3'))
 
@@ -73,6 +77,23 @@ def get_channel_cap1_path(channel_name: str, base_dir: str = None) -> str:
     if os.path.exists(specific):
         return specific
     return os.path.join(_base, 'assets', 'cap1.mp4')
+
+
+def get_anchor_clip(base_dir: str = None) -> str:
+    """Pick a RANDOM 'welcome anchor' clip from assets/anchors/ (shared pool).
+
+    Played right after the channel intro per the Production Manual §8
+    (Channel Intro → Welcome Anchor → Headlines). Returns '' if the folder is
+    empty/missing — the caller then skips the anchor segment gracefully.
+
+    File convention: assets/anchors/anchor1.mp4, anchor2.mp4, ...
+    """
+    import glob, random
+    _base = base_dir or BASE_DIR
+    clips = sorted(glob.glob(os.path.join(_base, 'assets', 'anchors', '*.mp4')))
+    if not clips:
+        return ''
+    return random.choice(clips)
 
 
 def get_channel_tts_provider(channel_name: str) -> str:
@@ -140,6 +161,7 @@ WORDS_PER_SECOND_TELUGU = 2.2
 MAX_WORDS_PER_SCRIPT    = int(60 * WORDS_PER_SECOND_TELUGU)
 MAX_WORDS_PER_HEADLINE  = int(HEADLINE_DURATION_PER_ITEM * WORDS_PER_SECOND_TELUGU)
 FIVE_MIN_INJECT_ENABLED = os.getenv('FIVE_MIN_INJECT_ENABLED', 'true').lower() != 'false'
+ADS_ENABLED             = os.getenv('ADS_ENABLED', 'true').lower() != 'false'
 
 
 
@@ -206,7 +228,7 @@ YOUR JOB:
 Rewrite the given headline into the most powerful broadcast TV headline possible.
 
 HOW TO REWRITE:
-- Target: 5 to 8 words
+- Target: 6 to 8 words
 - Strategy: combine words smartly, use strong verbs, drop filler words
 - NEVER drop WHO, WHAT, WHERE — these are the core of any headline
 - Use hyphens to combine related words
@@ -230,7 +252,7 @@ SLOT DEFINITIONS:
   [కర్మ]      — 2-3 words  — WHAT — the object/action  (e.g. నిరసన కార్యక్రమం, భూసేకరణ నిర్ణయాన్ని)
   [క్రియ]     — 1 word     — VERB — past tense Telugu   (e.g. చేశారు, ప్రకటించింది, అరెస్టు చేశారు)
 
-TOTAL: 5 to 8 words. Every slot must be filled. Sentence must end on the verb.
+TOTAL: 6 to 8 words (never fewer than 6). Every slot must be filled. Sentence must end on the verb.
 
 LANGUAGE: Telugu script only. Zero English, Hindi, Urdu words.
 
@@ -582,6 +604,16 @@ _SYSTEM_FONT_SUBSTITUTES = {
     ],
 }
 
+# Whole folders mirrored from S3 (variable-count pools — operator just drops
+# files in the S3 prefix, no code change needed). Every object under
+# {S3_STATIC_PREFIX}/{folder}/ is synced into local {folder}/.
+#   S3:    static-assets/assets/anchors/anchor1.mp4, anchor2.mp4, ...
+#   Local: assets/anchors/anchor1.mp4, anchor2.mp4, ...
+_S3_SYNC_FOLDERS = [
+    'assets/anchors',
+]
+
+
 def ensure_assets():
     """Sync static assets from S3 (S3 = source of truth).
 
@@ -628,11 +660,7 @@ def ensure_assets():
             return True
         return False
 
-    to_get = [a for a in _STATIC_ASSETS if _needs_download(a)]
-    if not to_get:
-        return
-
-    for asset in to_get:
+    for asset in [a for a in _STATIC_ASSETS if _needs_download(a)]:
         local_path = os.path.join(BASE_DIR, asset)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         s3_key = f"{S3_STATIC_PREFIX}/{asset}"
@@ -641,4 +669,32 @@ def ensure_assets():
             print(f"[assets] ✅ Downloaded: {asset}")
         except Exception as e:
             print(f"[assets] ⚠️ Could not download {asset}: {e}")
+
+    # ── Folder mirrors: download EVERY object under each S3 folder prefix ──────
+    # (variable-count pools like anchors — add files in S3, no code change)
+    for folder in _S3_SYNC_FOLDERS:
+        prefix = f"{S3_STATIC_PREFIX}/{folder}/"
+        local_dir = os.path.join(BASE_DIR, folder)
+        os.makedirs(local_dir, exist_ok=True)
+        try:
+            paginator = s3.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=S3_BUCKET_NAME, Prefix=prefix):
+                for obj in page.get('Contents', []):
+                    key = obj['Key']
+                    if key.endswith('/'):
+                        continue  # skip the folder placeholder
+                    fname = os.path.basename(key)
+                    if not fname:
+                        continue
+                    dst = os.path.join(local_dir, fname)
+                    # download if missing or size differs (self-heal)
+                    if os.path.exists(dst) and os.path.getsize(dst) == int(obj.get('Size', -1)):
+                        continue
+                    try:
+                        s3.download_file(S3_BUCKET_NAME, key, dst)
+                        print(f"[assets] ✅ Synced {folder}/{fname}")
+                    except Exception as e:
+                        print(f"[assets] ⚠️ Could not sync {folder}/{fname}: {e}")
+        except Exception as e:
+            print(f"[assets] ⚠️ Folder sync failed for {folder}: {e}")
 # ─────────────────────────────────────────────────────────────────────────────

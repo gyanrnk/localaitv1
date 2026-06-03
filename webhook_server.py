@@ -1433,9 +1433,34 @@ def retry_failed_reports_loop():
             retryable = _rsm.get_retryable_reports()
             if retryable:
                 logger.info(f"🔁 Found {len(retryable)} report(s) to retry")
+
+            # Re-fetch CURRENT statuses — a retryable report stores a stale
+            # 'approved' from when it first failed; if the admin rejected it
+            # since, it must NOT be retried. {id: status}; {} on API error.
+            _status_now = {}
+            try:
+                import requests as _rq
+                from config import LOCALAITV_API_TOKEN as _tok
+                _r = _rq.get(REPORTS_API_URL,
+                             headers={"Host": "localaitv.com", "Authorization": f"Bearer {_tok}"},
+                             timeout=10)
+                if _r.status_code == 200:
+                    _data = _r.json()
+                    for _rep in _data.get('items', _data.get('data', [])):
+                        if _rep.get('id'):
+                            _status_now[_rep['id']] = (_rep.get('status') or '').strip().lower()
+            except Exception as _e:
+                logger.warning(f"⚠️ Retry status refresh failed: {_e}")
+
             for report in retryable:
                 report_id = report.get('id')
                 if not report_id:
+                    continue
+                # If the report is visible in the API now and is NOT approved, skip.
+                # (Not found = older/paginated → trust its original approval.)
+                _cur = _status_now.get(report_id)
+                if _cur is not None and _cur != 'approved':
+                    logger.info(f"⏭️ Retry skip {report_id} — current status='{_cur}' (not approved)")
                     continue
                 logger.info(f"🔁 Retrying report: {report_id}")
                 # Re-enqueue — _enqueue_report will call mark_processing again
@@ -1810,6 +1835,16 @@ def _process_matched_background(matched: dict, sender: str):
 
 
 def _enqueue_report(report: dict):
+    # ── Compliance gate: ONLY admin-approved reports may be processed. ─────────
+    # Single choke-point for EVERY path (poller, webhook POST, retry loop) so a
+    # 'rejected' / 'new' / 'read' report can never slip into processing — the
+    # per-path checks were inconsistent (only the poller had one).
+    _status = (report.get('status') or '').strip().lower()
+    if _status != 'approved':
+        logger.info(f"⏭️ [ENQUEUE] Skipping report {report.get('id')} — "
+                    f"status='{_status or 'unknown'}' (only 'approved' is processed)")
+        return
+
     logger.info(f"📋 Report data: subject='{report.get('subject')}' message='{report.get('message')}' "
                 f"videos={report.get('video_paths')} images={report.get('image_paths')} audios={report.get('audio_paths')}")
     # [DEBUG] Poora payload print karo — isse pata chalega kaunsi fields aa rahi hain

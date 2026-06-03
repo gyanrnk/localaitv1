@@ -26,6 +26,11 @@ services:
       - AWS_SECRET_ACCESS_KEY_M=${AWS_SECRET_ACCESS_KEY_M}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Model selection (was missing → container fell back to gemini-2.5-pro
+      # default which returns empty/finish_reason=length on script+headline)
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - OPENAI_HEADLINE_MODEL=${OPENAI_HEADLINE_MODEL:-gpt-4o-mini}
       - SARVAM_API_KEY=${SARVAM_API_KEY}
       - GOOGLE_TTS_API_KEY=${GOOGLE_TTS_API_KEY}
       - TTS_PROVIDER_DEFAULT=${TTS_PROVIDER_DEFAULT:-gcp}
