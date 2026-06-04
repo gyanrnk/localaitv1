@@ -291,8 +291,13 @@ def build_program_bulletin(channel_name: str, kind: str,
     segs.append(main)
     if thanks and Path(thanks).exists():   segs.append(Path(thanks))
 
-    vf = ("scale=1920:1080:force_original_aspect_ratio=decrease,"
-          "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25,format=yuv420p")
+    # ⚠️ Stream -f concat ke liye format INJECTIONS (vege/train) jaisa hona chahiye:
+    # 1280x720, H.264 BASELINE, level 4.0. Citizen + vege sab baseline hain — agar
+    # notebooklm High-profile/1080 me ho to concat demuxer use skip/glitch kar deta
+    # hai (logs me add hota hai par stream me nahi dikhta). _normalize_for_stream
+    # ke params se exact match.
+    vf = ("scale=1280:720:force_original_aspect_ratio=decrease,"
+          "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25,format=yuv420p")
     inputs, fc = [], []
     for i, s in enumerate(segs):
         inputs += ["-i", str(s)]
@@ -303,9 +308,10 @@ def build_program_bulletin(channel_name: str, kind: str,
 
     cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", "".join(fc),
            "-map", "[vout]", "-map", "[aout]",
-           "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-           "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k",
-           "-g", "50", "-keyint_min", "50", "-sc_threshold", "0",
+           "-c:v", "libx264", "-preset", "veryfast",
+           "-profile:v", "baseline", "-level", "4.0",
+           "-pix_fmt", "yuv420p", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+           "-r", "25", "-g", "50", "-keyint_min", "50", "-sc_threshold", "0", "-bf", "0",
            "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
            "-movflags", "+faststart", str(out)]
     debug(f"[{channel_name}/{kind}] Building program bulletin: {' + '.join(s.name for s in segs)}")
