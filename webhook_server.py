@@ -1799,6 +1799,45 @@ def cleanup_old_data_loop():
             logger.warning(f"⚠️ processed_report_ids DB refresh failed: {e}")
 
         # ══════════════════════════════════════════════════════════════════════
+        # STEP 12 — S3 bulletins prune (default 7 din retention)
+        # IAM user `news-media` ke paas s3:PutLifecycleConfiguration nahi hai, par
+        # delete-objects chalta hai — isliye lifecycle ki jagah yahan code se prune
+        # karte hain. Streamer LATEST LOCAL bulletin use karta hai, to purane S3
+        # bulletins safe-to-delete hain. Tunable: S3_BULLETIN_RETENTION_DAYS.
+        # ══════════════════════════════════════════════════════════════════════
+        try:
+            from config import USE_S3, S3_BUCKET_NAME
+            _retain_days = int(os.getenv('S3_BULLETIN_RETENTION_DAYS', '7'))
+            if USE_S3 and S3_BUCKET_NAME and _retain_days > 0:
+                import boto3
+                from datetime import timezone as _tz, timedelta as _td
+                _s3p = boto3.client(
+                    's3', region_name=os.getenv('AWS_REGION', 'ap-south-2'),
+                    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+                    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+                )
+                _cut = datetime.now(_tz.utc) - _td(days=_retain_days)
+                _del = []; _freed = 0
+                _pg = _s3p.get_paginator('list_objects_v2')
+                for _page in _pg.paginate(Bucket=S3_BUCKET_NAME, Prefix='bulletins/'):
+                    for _o in _page.get('Contents', []):
+                        if _o['LastModified'] < _cut:
+                            _del.append({'Key': _o['Key']}); _freed += _o['Size']
+                _ndel = 0
+                for _i in range(0, len(_del), 1000):
+                    _chunk = _del[_i:_i + 1000]
+                    _r = _s3p.delete_objects(Bucket=S3_BUCKET_NAME,
+                                             Delete={'Objects': _chunk, 'Quiet': True})
+                    _ndel += len(_chunk) - len(_r.get('Errors', []))
+                if _ndel:
+                    logger.info(f"🗑️ S3 bulletin prune: deleted {_ndel} object(s) older than "
+                                f"{_retain_days}d (~{_freed/1e9:.2f} GB freed)")
+                else:
+                    logger.info(f"🗑️ S3 bulletin prune: nothing older than {_retain_days}d")
+        except Exception as e:
+            logger.warning(f"⚠️ S3 bulletin prune failed: {e}")
+
+        # ══════════════════════════════════════════════════════════════════════
         # DONE
         # ══════════════════════════════════════════════════════════════════════
         logger.info("✅ 24-hour cleanup complete")
