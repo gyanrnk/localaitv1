@@ -203,6 +203,125 @@ def _build_combined_filler(channel_name: str) -> Path | None:
     debug(f"[{channel_name}] Combined filler failed: {r.stderr.decode()[-300:]}")
     return None
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# NotebookLM BULLETIN  (Intro -> Namaste -> NotebookLM -> Thanks)
+# ════════════════════════════════════════════════════════════════════════════
+# NotebookLM ab static filler nahi — dynamic location-wise bulletin hai.
+# Operator MAIN bucket (S3_BUCKET_NAME) me `notebooklm/{Channel}/*.mp4` upload
+# karta hai. Yahan latest file fetch karke flow assemble karte hain:
+#   Intro (channel) -> Namaste (welcome anchor) -> NotebookLM -> Thanks (ending anchor)
+# Namaste/Thanks = anchors/anchor{i} <-> anchors_end/anchor_end{i} (SAME person, §13).
+S3_BUCKET_MAIN = os.getenv("S3_BUCKET_NAME", "")
+
+
+def _s3_client_main():
+    """MAIN bucket client (notebooklm bulletins). yt_streamer ka default _s3_client
+    EXT bucket (_M creds) use karta hai; notebooklm MAIN bucket me hai."""
+    return boto3.client(
+        "s3", region_name=os.getenv("AWS_REGION", "ap-south-2"),
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    )
+
+
+def fetch_latest_program(channel_name: str, kind: str) -> "Path | None":
+    """MAIN bucket `notebooklm/{Channel}/{kind}/` se latest .mp4 download.
+    kind = 'local' | 'district' | ... (subfolder = bulletin type). None agar koi nahi."""
+    if not S3_BUCKET_MAIN:
+        debug("program: S3_BUCKET_NAME not set"); return None
+    prefix = f"notebooklm/{channel_name}/{kind}/"
+    try:
+        res  = _s3_client_main().list_objects_v2(Bucket=S3_BUCKET_MAIN, Prefix=prefix)
+        mp4s = [o for o in res.get("Contents", []) if o["Key"].endswith(".mp4") and o["Size"] > 0]
+        if not mp4s:
+            debug(f"[{channel_name}/{kind}] no file in {prefix}")
+            return None
+        latest   = max(mp4s, key=lambda o: o["LastModified"])
+        # cache name me channel+kind taaki same filename (notebooklm.mp4) alag kinds me na takraye
+        safe     = f"{channel_name.lower()}_{kind}_" + Path(latest["Key"]).name
+        local    = NOTEBOOKLM_CACHE_DIR.resolve() / safe
+        s3_mtime = latest["LastModified"].timestamp()
+        # Re-download if missing OR S3 version newer (fixed-name daily overwrite → stale cache se bacho)
+        fresh = (local.exists() and local.stat().st_size > 100_000
+                 and local.stat().st_mtime >= s3_mtime)
+        if not fresh:
+            _s3_client_main().download_file(S3_BUCKET_MAIN, latest["Key"], str(local))
+            debug(f"[{channel_name}/{kind}] downloaded (fresh): {local.name}")
+        else:
+            debug(f"[{channel_name}/{kind}] cache hit: {local.name}")
+        return local
+    except (BotoCoreError, ClientError) as e:
+        debug(f"[{channel_name}/{kind}] program fetch error: {e}")
+        return None
+
+
+def build_program_bulletin(channel_name: str, kind: str,
+                           out_dir: str = "outputs/program_bulletins") -> "Path | None":
+    """NotebookLM-sourced program bulletin flow:
+        Intro -> Namaste(welcome anchor) -> Main file(kind) -> Thanks(ending anchor)
+    kind = 'local' | 'district' (notebooklm/{Channel}/{kind}/ se main file).
+    Intro abhi channel intro (Intro1) — Intro2/Intro3 aate hi swap. 1920x1080 bulletin quality.
+    Returns assembled video Path, or None."""
+    main = fetch_latest_program(channel_name, kind)
+    if main is None:
+        debug(f"[{channel_name}/{kind}] No source file — skipping {kind} bulletin")
+        return None
+
+    key      = channel_name.lower().replace(' ', '_').replace('-', '_')
+    out_base = Path(out_dir) / channel_name
+    out_base.mkdir(parents=True, exist_ok=True)
+    out      = out_base / f"{kind}_bulletin_{key}.mp4"
+
+    # ── Cache: agar output source (S3 file) se naya hai to dobara concat mat karo ──
+    # (streamer har cycle me ise call karega — bina cache ke har baar 1-min rebuild)
+    if (out.exists() and out.stat().st_size > 100_000
+            and out.stat().st_mtime >= main.stat().st_mtime):
+        debug(f"[{channel_name}/{kind}] bulletin cache hit: {out.name}")
+        return out
+
+    intro = _get_intro_path(channel_name)                 # channel intro (Kurnool -> intro4.mp4)
+    from config import get_anchor_pair
+    namaste, thanks = get_anchor_pair(str(_SCRIPT_DIR))   # welcome + ending anchor (SAME person, §13)
+
+    # Ordered flow segments — missing ko gracefully skip
+    segs = []
+    if intro and Path(intro).exists():     segs.append(Path(intro))
+    if namaste and Path(namaste).exists(): segs.append(Path(namaste))
+    segs.append(main)
+    if thanks and Path(thanks).exists():   segs.append(Path(thanks))
+
+    vf = ("scale=1920:1080:force_original_aspect_ratio=decrease,"
+          "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25,format=yuv420p")
+    inputs, fc = [], []
+    for i, s in enumerate(segs):
+        inputs += ["-i", str(s)]
+        fc.append(f"[{i}:v]{vf}[v{i}];")
+        fc.append(f"[{i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];")
+    concat_in = "".join(f"[v{i}][a{i}]" for i in range(len(segs)))
+    fc.append(f"{concat_in}concat=n={len(segs)}:v=1:a=1[vout][aout]")
+
+    cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", "".join(fc),
+           "-map", "[vout]", "-map", "[aout]",
+           "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+           "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k",
+           "-g", "50", "-keyint_min", "50", "-sc_threshold", "0",
+           "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
+           "-movflags", "+faststart", str(out)]
+    debug(f"[{channel_name}/{kind}] Building program bulletin: {' + '.join(s.name for s in segs)}")
+    r = subprocess.run(cmd, capture_output=True, timeout=1200)
+    if r.returncode == 0 and out.exists() and out.stat().st_size > 100_000:
+        debug(f"[{channel_name}/{kind}] bulletin ready: {out.name} ({out.stat().st_size//1024} KB)")
+        return out
+    debug(f"[{channel_name}/{kind}] bulletin failed: {r.stderr.decode()[-400:]}")
+    return None
+
+
+# Backward-compatible thin wrapper (notebooklm == 'local' kind)
+def build_notebooklm_bulletin(channel_name: str) -> "Path | None":
+    return build_program_bulletin(channel_name, "local")
+
+
 _train_rotation_idx = 0
 
 # ── Fixed daily broadcast schedule (IST) ─────────────────────────────────────
@@ -521,7 +640,8 @@ def reset_played_slots_at_midnight():
 
 # ── Concat list builder ───────────────────────────────────────────────────────
 
-def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject_payload=None):
+def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject_payload=None,
+                      channel_name=None):
     global _train_rotation_idx
     if not bulletins:
         debug(f"[{label}] No bulletins — skipping concat build")
@@ -568,19 +688,50 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
             else:
                 debug(f"[{label}] ⚠️ Inject file invalid ({inject_payload.name}) — skipping")
 
+    # ── NotebookLM program bulletins (cached build) — agar channel ke liye ho ──
+    nlm_local = nlm_district = None
+    if channel_name:
+        try:
+            nlm_local    = build_program_bulletin(channel_name, "local")
+            nlm_district = build_program_bulletin(channel_name, "district")
+        except Exception as e:
+            debug(f"[{label}] program bulletin build error: {e}")
+
     skipped = 0
-    for i, news in enumerate(bulletins):
-        if not _is_valid_mp4(news):
-            debug(f"[{label}] ⚠️ Corrupt bulletin skipped: {news.name}")
-            skipped += 1
-            continue
-        lines.append(f"file \'{str(news)}\'")
-        if i % 2 == 0 and vege_path:
+    if nlm_local or nlm_district:
+        # ── Flow: news_bulletin → notebooklm(local) → vege/train → notebooklm(district) ──
+        for news in bulletins:
+            if _is_valid_mp4(news):
+                lines.append(f"file \'{str(news)}\'")
+            else:
+                skipped += 1
+        if nlm_local and _is_valid_mp4(nlm_local):
+            lines.append(f"file \'{str(nlm_local)}\'")
+            debug(f"[{label}] + notebooklm(local)")
+        # vege OR train (jo available ho)
+        if vege_path:
             lines.append(f"file \'{str(vege_path)}\'")
-        elif i % 2 == 1 and train_clips:
+        elif train_clips:
             t = train_clips[_train_rotation_idx % len(train_clips)]
             _train_rotation_idx += 1
             lines.append(f"file \'{str(t)}\'")
+        if nlm_district and _is_valid_mp4(nlm_district):
+            lines.append(f"file \'{str(nlm_district)}\'")
+            debug(f"[{label}] + notebooklm(district)")
+    else:
+        # ── Default interleave (channels without notebooklm) — pehle jaisa ──
+        for i, news in enumerate(bulletins):
+            if not _is_valid_mp4(news):
+                debug(f"[{label}] ⚠️ Corrupt bulletin skipped: {news.name}")
+                skipped += 1
+                continue
+            lines.append(f"file \'{str(news)}\'")
+            if i % 2 == 0 and vege_path:
+                lines.append(f"file \'{str(vege_path)}\'")
+            elif i % 2 == 1 and train_clips:
+                t = train_clips[_train_rotation_idx % len(train_clips)]
+                _train_rotation_idx += 1
+                lines.append(f"file \'{str(t)}\'")
 
     if skipped:
         debug(f"[{label}] ⚠️ {skipped}/{len(bulletins)} bulletins skipped (corrupt)")
@@ -798,7 +949,8 @@ def _launch_streams(inject_type=None, inject_payload=None):
             debug(f"[{ch['label']}] No bulletins and no intro — skipping")
         inj_t = inject_type    if i == 0 else None
         inj_p = inject_payload if i == 0 else None
-        wrote = build_concat_list(bulletins, ch["concat"], ch["label"], inj_t, inj_p)
+        wrote = build_concat_list(bulletins, ch["concat"], ch["label"], inj_t, inj_p,
+                                  channel_name=ch["name"])
         # Combined filler is pre-encoded (720p/25fps/baseline/no-B-frames) — copy mode is safe.
         p = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"]) \
             if (wrote and ch["stream_key"]) else None
@@ -877,7 +1029,8 @@ def run_streamer():
                         # Next FFmpeg crash/restart pe naya bulletin pick up hoga
                         for i, ch in enumerate(active):
                             if new_buls[i]:
-                                build_concat_list(new_buls[i], ch["concat"], ch["label"])
+                                build_concat_list(new_buls[i], ch["concat"], ch["label"],
+                                                  channel_name=ch["name"])
                                 debug(f"[{ch['label']}] Concat list updated silently ({len(new_buls[i])} bulletins) — no restart")
                         last_buls = new_buls
                     last_check = time.time()
@@ -891,7 +1044,8 @@ def run_streamer():
                         fresh_buls = _with_fallback(ch["watch_dir"], ch["name"])
                         last_buls[i] = fresh_buls
                         if (fresh_buls or FILLER_FILE.exists()) and ch["stream_key"]:
-                            wrote = build_concat_list(fresh_buls, ch["concat"], ch["label"])
+                            wrote = build_concat_list(fresh_buls, ch["concat"], ch["label"],
+                                                      channel_name=ch["name"])
                             if wrote:
                                 procs[i] = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"])
                                 if procs[i]: monitor_ffmpeg(procs[i], ch["label"])
