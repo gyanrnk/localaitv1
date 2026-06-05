@@ -17,6 +17,18 @@ GEMINI_API_KEY        = os.getenv('GEMINI_API_KEY', '')
 # calls (max_tokens 80-2000) return EMPTY with finish_reason=length. Use a flash
 # model (minimal thinking) for fast text gen. Overridable via .env GEMINI_MODEL.
 GEMINI_MODEL          = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
+
+# --- Vertex AI (GCP postpay) mode -------------------------------------------
+# When GEMINI_USE_VERTEX=true, GeminiHandler talks to Vertex AI's
+# OpenAI-compatible endpoint instead of AI Studio. Auth is a short-lived GCP
+# access token (refreshed automatically) derived from either:
+#   - a service-account key file (GOOGLE_APPLICATION_CREDENTIALS=...vertex-key.json), or
+#   - Application Default Credentials (`gcloud auth application-default login`).
+# No GEMINI_API_KEY is needed in Vertex mode. Leave unset to keep AI Studio.
+GEMINI_USE_VERTEX     = os.getenv('GEMINI_USE_VERTEX', '').lower() in ('1', 'true', 'yes')
+VERTEX_PROJECT        = os.getenv('VERTEX_PROJECT', 'localaitv')
+VERTEX_LOCATION       = os.getenv('VERTEX_LOCATION', 'us-central1')
+
 SARVAM_API_KEY        = os.getenv('SARVAM_API_KEY', '')
 MAX_TTS_CONCURRENCY  = int(os.getenv('MAX_TTS_CONCURRENCY', '3'))
 

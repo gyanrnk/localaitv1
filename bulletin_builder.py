@@ -1309,7 +1309,24 @@ def _save_ticker_cursor(val: float):
     except Exception as e:
         print(f"❌ ticker_state save error: {e}")
 
-CLIP_MAX = 20  # max clip duration to consider for allocation (in seconds)
+CLIP_MAX = 20  # legacy cap (kept for reference)
+
+# ── Clip = 50% of NEWS CONTENT (intro+analysis = 50%, clip = 50%) ────────────
+# User: news content me clip 50% + narration(intro+analysis) 50%. Headline card
+# alag (montage) hai, isliye 50/50 sirf news-segment (intro+clip+analysis) ka.
+#   → clip = narration (intro+analysis)  ⇒ clip 50%, narration 50%
+# HARD CAP: individual news item (intro+clip+analysis) max 59s. Agar narration
+# lambi ho to clip reduce karke item 59s pe rakho. Editorial window + min-floor
+# se bhi bounded.
+CLIP_MIN_DUR = 5.0
+ITEM_MAX_DUR = 59.0   # individual news item (intro+clip+analysis) ka MAX duration
+
+def _clip_half(window, narration_dur):
+    """clip = narration (intro+analysis) → 50/50 news content. Item (intro+clip+
+    analysis) ITEM_MAX_DUR (59s) pe capped. Window + CLIP_MIN_DUR floor se bounded."""
+    narr   = float(narration_dur)
+    target = min(narr, max(CLIP_MIN_DUR, ITEM_MAX_DUR - narr))   # clip=narr, item≤59
+    return max(CLIP_MIN_DUR, min(float(window), target))
 
 # def load_metadata() -> List[Dict]:
 #     if not os.path.exists(METADATA_FILE):
@@ -2058,15 +2075,17 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         )
 
         if has_clip_item:
-            clip_dur = min(
-                float(item['clip_end']) - float(item['clip_start']),
-                CLIP_MAX
-            )
             intro_path_f    = os.path.join(OUTPUT_AUDIO_DIR, intro_name)
             analysis_path_f = os.path.join(OUTPUT_AUDIO_DIR, analysis_name) if analysis_name else None
 
             intro_dur_actual    = _audio_dur(intro_path_f)    if os.path.exists(intro_path_f)    else float(item.get('script_duration', 0.0)) * 0.5
             analysis_dur_actual = _audio_dur(analysis_path_f) if (analysis_path_f and os.path.exists(analysis_path_f)) else 0.0
+
+            # clip = narration (intro+analysis) → 50/50, item ≤ 59s
+            clip_dur = _clip_half(
+                float(item['clip_end']) - float(item['clip_start']),
+                intro_dur_actual + analysis_dur_actual,
+            )
 
             item['total_duration'] = (
                 float(item.get('headline_duration', 0.0)) +
@@ -2180,9 +2199,9 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
     for item in selected:
         total_fixed += float(item.get('headline_duration', 0.0))
         if item.get('clip_structure') and item.get('clip_start') is not None:
-            clip_dur = min(
+            clip_dur = _clip_half(
                 float(item['clip_end']) - float(item['clip_start']),
-                CLIP_MAX
+                item.get('script_duration', 0.0),
             )
             total_fixed += clip_dur
 
@@ -2256,9 +2275,12 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         headline_dur = float(item.get('headline_duration', 0.0))
         script_dur   = float(item.get('script_duration', 0.0))
         has_clip     = bool(item.get('clip_structure') and item.get('clip_start') is not None)
-        clip_dur     = min(float(item["clip_end"]) - float(item["clip_start"]), CLIP_MAX) if has_clip else 0.0
 
         actual_script_slot = script_dur / uniform_atempo if uniform_atempo > 0 else script_dur
+
+        # clip = narration (script) → 50/50, item ≤ 59s
+        clip_dur     = _clip_half(float(item["clip_end"]) - float(item["clip_start"]),
+                                  actual_script_slot) if has_clip else 0.0
 
         item['allocated_duration'] = headline_dur + clip_dur + actual_script_slot
         item['_script_slot']       = actual_script_slot
@@ -2562,7 +2584,11 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         if has_clip:
             actual_intro    = _audio_dur(os.path.join(scripts_dir, intro_dest_name))    if intro_dest_name    else 0.0
             actual_analysis = _audio_dur(os.path.join(scripts_dir, analysis_dest_name)) if analysis_dest_name else 0.0
-            clip_dur_actual = min(float(item['clip_end']) - float(item['clip_start']), CLIP_MAX)
+            # clip = narration (intro+analysis) → 50/50, item ≤ 59s
+            clip_dur_actual = _clip_half(
+                float(item['clip_end']) - float(item['clip_start']),
+                actual_intro + actual_analysis,
+            )
             item['allocated_duration'] = (
                 float(item.get('headline_duration', 0.0)) +
                 actual_intro + clip_dur_actual + actual_analysis

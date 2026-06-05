@@ -444,9 +444,72 @@ from config import (
     OPENAI_WHISPER_MODEL,
     GEMINI_API_KEY,
     GEMINI_MODEL,
+    GEMINI_USE_VERTEX,
+    VERTEX_PROJECT,
+    VERTEX_LOCATION,
     TELUGU_NEWS_SCRIPT_PROMPT,
     TELUGU_HEADLINE_PROMPT,
 )
+
+
+class _VertexTokenSource:
+    """Supplies fresh GCP access tokens for Vertex AI's OpenAI-compatible endpoint.
+
+    Credentials are resolved via google.auth.default(), which picks up EITHER a
+    service-account key file (GOOGLE_APPLICATION_CREDENTIALS) OR user ADC created
+    by `gcloud auth application-default login`. Tokens last ~1h and are refreshed
+    transparently when expired.
+    """
+
+    _SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+
+    def __init__(self):
+        import google.auth
+        from google.auth.transport.requests import Request
+        self._creds, _ = google.auth.default(scopes=self._SCOPES)
+        self._request = Request()
+        self._refresh()
+
+    def _refresh(self):
+        self._creds.refresh(self._request)
+
+    def token(self) -> str:
+        if not self._creds.valid:
+            self._refresh()
+        return self._creds.token
+
+
+class _VertexCompletions:
+    def __init__(self, parent):
+        self._parent = parent
+
+    def create(self, **kwargs):
+        # Inject a fresh bearer token before every call (tokens expire ~1h).
+        self._parent._client.api_key = self._parent._auth.token()
+        return self._parent._client.chat.completions.create(**kwargs)
+
+
+class _VertexChat:
+    def __init__(self, parent):
+        self.completions = _VertexCompletions(parent)
+
+
+class _VertexOpenAIClient:
+    """Drop-in stand-in for the OpenAI client exposing `.chat.completions.create`,
+    but refreshing the Vertex access token before each request."""
+
+    def __init__(self, project: str, location: str):
+        self._auth = _VertexTokenSource()
+        # The 'global' endpoint uses a bare hostname (no region prefix); regional
+        # endpoints use "<region>-aiplatform.googleapis.com". Newer models (e.g.
+        # gemini-3.x) are commonly served only via the global endpoint.
+        host = "aiplatform.googleapis.com" if location == "global" else f"{location}-aiplatform.googleapis.com"
+        base_url = (
+            f"https://{host}/v1beta1/"
+            f"projects/{project}/locations/{location}/endpoints/openapi"
+        )
+        self._client = OpenAI(api_key=self._auth.token(), base_url=base_url)
+        self.chat = _VertexChat(self)
 
 
 class OpenAIHandler:
@@ -691,14 +754,26 @@ class GeminiHandler:
     """Gemini API handler — same interface as OpenAIHandler for script/headline generation."""
 
     def __init__(self):
-        if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY not set in .env")
-        self.client = OpenAI(
-            api_key=GEMINI_API_KEY,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        )
-        self.model          = GEMINI_MODEL
-        self.headline_model = GEMINI_MODEL
+        if GEMINI_USE_VERTEX:
+            # Vertex AI mode (GCP postpay). Auth via google.auth (SA key or ADC);
+            # access token is refreshed automatically before each call.
+            self.client = _VertexOpenAIClient(VERTEX_PROJECT, VERTEX_LOCATION)
+            # Vertex's OpenAI-compat endpoint requires the "google/" model prefix.
+            base_model = GEMINI_MODEL if GEMINI_MODEL.startswith("google/") else f"google/{GEMINI_MODEL}"
+            self.model          = base_model
+            self.headline_model = base_model
+            print(f"[GEMINI] 🟢 Vertex AI mode | project={VERTEX_PROJECT} | "
+                  f"location={VERTEX_LOCATION} | model={base_model}")
+        else:
+            # AI Studio mode (prepay) — original behaviour, kept as fallback.
+            if not GEMINI_API_KEY:
+                raise ValueError("GEMINI_API_KEY not set in .env")
+            self.client = OpenAI(
+                api_key=GEMINI_API_KEY,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            )
+            self.model          = GEMINI_MODEL
+            self.headline_model = GEMINI_MODEL
         self._semaphore     = threading.Semaphore(1)
 
     def generate_news_script(self, input_text: str, structure_hint: dict = None, target_words: int = None) -> Optional[str]:
@@ -905,7 +980,7 @@ class GeminiHandler:
 
 def get_llm_handler(location_name: str = ''):
     """Returns GeminiHandler for all locations."""
-    if GEMINI_API_KEY:
+    if GEMINI_USE_VERTEX or GEMINI_API_KEY:
         return GeminiHandler()
-    print("⚠️  GEMINI_API_KEY not set — falling back to OpenAI")
+    print("⚠️  GEMINI_API_KEY not set and Vertex disabled — falling back to OpenAI")
     return OpenAIHandler()

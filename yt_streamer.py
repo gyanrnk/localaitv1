@@ -328,6 +328,67 @@ def build_notebooklm_bulletin(channel_name: str) -> "Path | None":
     return build_program_bulletin(channel_name, "local")
 
 
+_PROGRAM_KIND_TE = {"local": "స్థానిక వార్తలు", "district": "జిల్లా వార్తలు"}
+
+
+def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None:
+    """NotebookLM program bulletin ko /api/bulletins POST karo — once per build.
+    Citizen bulletins jaise hi UI me dikhe. Marker (.sent) se duplicate-send avoid:
+    sirf tab bhejo jab ye build pehle nahi bheja gaya (output source se naya)."""
+    video_path = Path(video_path)
+    if not video_path.exists():
+        return
+    marker = video_path.with_suffix(".sent")
+    # Is build ke liye already bhej diya? (marker output se naya/barabar)
+    if marker.exists() and marker.stat().st_mtime >= video_path.stat().st_mtime:
+        return
+
+    token = os.getenv("BULLETIN_API_TOKEN", "") or os.getenv("LOCALAITV_API_TOKEN", "")
+    if not (token and S3_BUCKET_MAIN):
+        debug(f"[{channel_name}/{kind}] API send skip — token/bucket missing")
+        return
+    try:
+        import requests
+        from datetime import datetime
+        from config import LOCATION_TELUGU_MAP, LOCATION_MAP
+
+        # 1. S3 pe upload (video_url ke liye)
+        ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
+        s3_key = f"bulletins/{channel_name}/nlm_{kind}_{ts}.mp4"
+        _s3_client_main().upload_file(str(video_path), S3_BUCKET_MAIN, s3_key)
+        region    = os.getenv("AWS_REGION", "ap-south-2")
+        video_url = f"https://{S3_BUCKET_MAIN}.s3.{region}.amazonaws.com/{s3_key}"
+
+        # 2. Title (channel telugu + kind) + location_id
+        ckey    = channel_name.lower()
+        loc_te  = LOCATION_TELUGU_MAP.get(ckey, channel_name)
+        loc_id  = LOCATION_MAP.get(ckey, 0)
+        kind_te = _PROGRAM_KIND_TE.get(kind, kind)
+        now_t   = datetime.now().strftime('%I:%M %p').lstrip('0')
+        title   = f"{loc_te} {kind_te} | 🕒 {now_t}"
+
+        payload = {
+            "title":          title,
+            "content":        f"NotebookLM {kind} bulletin",
+            "priority_level": "low",
+            "expiry_time":    None,
+            "location_id":    int(loc_id) if loc_id else 0,
+            "image_url":      None,
+            "audio_url":      None,
+            "video_url":      video_url,
+        }
+        r = requests.post("https://localaitv.com/api/bulletins", json=payload,
+                          headers={"Authorization": f"Bearer {token}",
+                                   "Content-Type": "application/json"}, timeout=20)
+        if r.status_code in (200, 201):
+            debug(f"[{channel_name}/{kind}] ✅ sent to API: {r.json().get('id','?')} | {title}")
+            marker.write_text(video_url)        # is build ko 'sent' mark karo
+        else:
+            debug(f"[{channel_name}/{kind}] ⚠️ Bulletin API {r.status_code}: {r.text[:140]}")
+    except Exception as e:
+        debug(f"[{channel_name}/{kind}] API send error: {e}")
+
+
 _train_rotation_idx = 0
 
 # ── Fixed daily broadcast schedule (IST) ─────────────────────────────────────
@@ -700,30 +761,60 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
         try:
             nlm_local    = build_program_bulletin(channel_name, "local")
             nlm_district = build_program_bulletin(channel_name, "district")
+            # NOTE: /api/bulletins POST (UI me dikhana) ABHI HOLD pe hai — calls
+            # intentionally DISABLED. Warna build_concat_list chalte hi (local test
+            # ya stream) S3 pe nlm_*.mp4 upload + production POST trigger ho jata.
+            # Un-hold karte waqt _maybe_send_program_to_api(...) calls wapas add karo
+            # + streamer ko BULLETIN_API_TOKEN env do (docker-compose.prod.yml).
+            #   if nlm_local:    _maybe_send_program_to_api(channel_name, "local",    nlm_local)
+            #   if nlm_district: _maybe_send_program_to_api(channel_name, "district", nlm_district)
         except Exception as e:
             debug(f"[{label}] program bulletin build error: {e}")
 
     skipped = 0
     if nlm_local or nlm_district:
-        # ── Flow: news_bulletin → notebooklm(local) → vege/train → notebooklm(district) ──
+        # ── "Ek ke baad ek": har SINGLE news ke baad poora program block ──
+        #   news → notebooklm(local) → vege/train → notebooklm(district) → next news …
+        #   NEWS_PER_PROGRAM = 1  (literal "one-after-another", phir loop)
+        NEWS_PER_PROGRAM = 1
+        valid_news = []
         for news in bulletins:
             if _is_valid_mp4(news):
-                lines.append(f"file \'{str(news)}\'")
+                valid_news.append(news)
             else:
                 skipped += 1
-        if nlm_local and _is_valid_mp4(nlm_local):
-            lines.append(f"file \'{str(nlm_local)}\'")
-            debug(f"[{label}] + notebooklm(local)")
-        # vege OR train (jo available ho)
-        if vege_path:
-            lines.append(f"file \'{str(vege_path)}\'")
-        elif train_clips:
-            t = train_clips[_train_rotation_idx % len(train_clips)]
-            _train_rotation_idx += 1
-            lines.append(f"file \'{str(t)}\'")
-        if nlm_district and _is_valid_mp4(nlm_district):
-            lines.append(f"file \'{str(nlm_district)}\'")
-            debug(f"[{label}] + notebooklm(district)")
+
+        _nlm_l_ok = bool(nlm_local and _is_valid_mp4(nlm_local))
+        _nlm_d_ok = bool(nlm_district and _is_valid_mp4(nlm_district))
+
+        def _append_program_block():
+            # local → vege (warna train) → district
+            if _nlm_l_ok:
+                lines.append(f"file \'{str(nlm_local)}\'")
+            if vege_path:
+                lines.append(f"file \'{str(vege_path)}\'")
+            elif train_clips:
+                global _train_rotation_idx
+                t = train_clips[_train_rotation_idx % len(train_clips)]
+                _train_rotation_idx += 1
+                lines.append(f"file \'{str(t)}\'")
+            # edge (b): na vege na train → block bas local+district (ya jo ho) chalega
+            if _nlm_d_ok:
+                lines.append(f"file \'{str(nlm_district)}\'")
+
+        if valid_news:
+            # ek news → ek program block, saare news par cycle; bahar × repeat = loop
+            for i in range(0, len(valid_news), NEWS_PER_PROGRAM):
+                for n in valid_news[i:i + NEWS_PER_PROGRAM]:
+                    lines.append(f"file \'{str(n)}\'")
+                _append_program_block()
+        else:
+            # edge (c): zero valid news → sirf program block, taaki stream khaali na rahe
+            _append_program_block()
+
+        if _nlm_l_ok or _nlm_d_ok:
+            debug(f"[{label}] + notebooklm SEQUENTIAL (1 news → program block) "
+                  f"news={len(valid_news)} local={_nlm_l_ok} district={_nlm_d_ok}")
     else:
         # ── Default interleave (channels without notebooklm) — pehle jaisa ──
         for i, news in enumerate(bulletins):

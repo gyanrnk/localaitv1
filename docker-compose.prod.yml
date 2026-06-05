@@ -29,6 +29,13 @@ services:
       # Model selection (was missing → container fell back to gemini-2.5-pro
       # default which returns empty/finish_reason=length on script+headline)
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      # Vertex AI mode (GCP postpay) — opt-in. When GEMINI_USE_VERTEX is unset/false
+      # the container behaves exactly as before (AI Studio mode). GOOGLE_APPLICATION_
+      # CREDENTIALS must be the CONTAINER path of the mounted key (see volumes below).
+      - GEMINI_USE_VERTEX=${GEMINI_USE_VERTEX:-false}
+      - VERTEX_PROJECT=${VERTEX_PROJECT:-localaitv}
+      - VERTEX_LOCATION=${VERTEX_LOCATION:-us-central1}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - OPENAI_HEADLINE_MODEL=${OPENAI_HEADLINE_MODEL:-gpt-4o-mini}
       - SARVAM_API_KEY=${SARVAM_API_KEY}
@@ -72,6 +79,10 @@ services:
       - ./inputs:/app/inputs
       - ./outputs:/app/outputs
       - ./news_intro.mpeg:/app/news_intro.mpeg:ro
+      # Vertex AI credentials (SA key OR ADC). Host file /root/localaitv1/adc.json
+      # → mounted read-only at /app/adc.json. Set in .env:
+      #   GOOGLE_APPLICATION_CREDENTIALS=/app/adc.json   (container path, NOT host)
+      - ./adc.json:/app/adc.json:ro
     networks:
       - localaitv_network
     healthcheck:
@@ -105,6 +116,11 @@ services:
       - S3_BUCKET_NAME_M=${S3_BUCKET_NAME_M}
       - AWS_ACCESS_KEY_ID_M=${AWS_ACCESS_KEY_ID_M}
       - AWS_SECRET_ACCESS_KEY_M=${AWS_SECRET_ACCESS_KEY_M}
+      # NotebookLM program bulletins streamer me bante hain → /api/bulletins POST
+      # ke liye token chahiye (citizen bulletins jaise UI me dikhe)
+      - LOCALAITV_API_URL=${LOCALAITV_API_URL}
+      - LOCALAITV_API_TOKEN=${LOCALAITV_API_TOKEN}
+      - BULLETIN_API_TOKEN=${BULLETIN_API_TOKEN}
       - YOUTUBE_STREAMING_ENABLED=${YOUTUBE_STREAMING_ENABLED:-true}
       - YT_STREAM_KEY=${YT_STREAM_KEY}
       - STREAM_COUNT=${STREAM_COUNT}

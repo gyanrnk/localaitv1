@@ -1,7 +1,14 @@
 # --- Security & Environment ---
 .env
 *.log
+*.log.*
+logs/
 *.mov
+
+# --- GCP / Vertex AI credentials (NEVER commit) ---
+vertex-key.json
+*-key.json
+application_default_credentials.json
 
 # --- Python Specific ---
 .venv/*
