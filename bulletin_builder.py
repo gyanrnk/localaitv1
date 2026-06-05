@@ -1322,11 +1322,21 @@ CLIP_MIN_DUR = 5.0
 ITEM_MAX_DUR = 59.0   # individual news item (intro+clip+analysis) ka MAX duration
 
 def _clip_half(window, narration_dur):
-    """clip = narration (intro+analysis) → 50/50 news content. Item (intro+clip+
-    analysis) ITEM_MAX_DUR (59s) pe capped. Window + CLIP_MIN_DUR floor se bounded."""
-    narr   = float(narration_dur)
-    target = min(narr, max(CLIP_MIN_DUR, ITEM_MAX_DUR - narr))   # clip=narr, item≤59
-    return max(CLIP_MIN_DUR, min(float(window), target))
+    """clip = narration (intro+analysis) → 50/50 news content.
+    HARD RULE: audio (intro+analysis) kabhi trim/cut nahi hota — poora & meaningful
+    chalta hai. Item (intro+clip+analysis) ITEM_MAX_DUR (59s) pe capped: narration
+    lambi ho to CLIP shrink/drop karke item 59s pe rakhte hain (audio nahi chhedte).
+      - room = 59 - narration  → clip ke liye bachi jagah
+      - room ≤ 0 (narration hi 59s+ ki): clip = 0 (drop; audio intact)
+      - warna clip = min(narration[50%], room, editorial-window); CLIP_MIN_DUR floor
+        sirf tab lagta hai jab room itni jagah de (floor kabhi cap cross nahi karta)."""
+    narr = float(narration_dur)
+    room = ITEM_MAX_DUR - narr
+    if room <= 0:
+        return 0.0
+    target = min(narr, room, float(window))       # 50% rule, 59s-cap + window se bounded
+    floor  = min(CLIP_MIN_DUR, room)              # floor room se zyada nahi
+    return max(floor, max(0.0, target))
 
 # def load_metadata() -> List[Dict]:
 #     if not os.path.exists(METADATA_FILE):

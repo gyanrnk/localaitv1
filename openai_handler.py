@@ -755,25 +755,36 @@ class GeminiHandler:
 
     def __init__(self):
         if GEMINI_USE_VERTEX:
-            # Vertex AI mode (GCP postpay). Auth via google.auth (SA key or ADC);
-            # access token is refreshed automatically before each call.
-            self.client = _VertexOpenAIClient(VERTEX_PROJECT, VERTEX_LOCATION)
-            # Vertex's OpenAI-compat endpoint requires the "google/" model prefix.
-            base_model = GEMINI_MODEL if GEMINI_MODEL.startswith("google/") else f"google/{GEMINI_MODEL}"
-            self.model          = base_model
-            self.headline_model = base_model
-            print(f"[GEMINI] 🟢 Vertex AI mode | project={VERTEX_PROJECT} | "
-                  f"location={VERTEX_LOCATION} | model={base_model}")
-        else:
-            # AI Studio mode (prepay) — original behaviour, kept as fallback.
-            if not GEMINI_API_KEY:
-                raise ValueError("GEMINI_API_KEY not set in .env")
-            self.client = OpenAI(
-                api_key=GEMINI_API_KEY,
-                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            )
-            self.model          = GEMINI_MODEL
-            self.headline_model = GEMINI_MODEL
+            try:
+                # Vertex AI mode (GCP postpay). Auth via google.auth (SA key or ADC);
+                # access token is refreshed automatically before each call.
+                self.client = _VertexOpenAIClient(VERTEX_PROJECT, VERTEX_LOCATION)
+                # Vertex's OpenAI-compat endpoint requires the "google/" model prefix.
+                base_model = GEMINI_MODEL if GEMINI_MODEL.startswith("google/") else f"google/{GEMINI_MODEL}"
+                self.model          = base_model
+                self.headline_model = base_model
+                print(f"[GEMINI] 🟢 Vertex AI mode | project={VERTEX_PROJECT} | "
+                      f"location={VERTEX_LOCATION} | model={base_model}")
+                self._semaphore = threading.Semaphore(1)
+                return
+            except Exception as e:
+                # Vertex creds/auth misconfigured (e.g. adc.json missing, wrong path,
+                # google-auth absent). DON'T crash the whole app — startup would
+                # restart-loop. Degrade to AI Studio if a key exists, else re-raise.
+                print(f"[GEMINI] ⚠️ Vertex init FAILED: {e}")
+                if not GEMINI_API_KEY:
+                    raise
+                print("[GEMINI] ↩️  Falling back to AI Studio mode (GEMINI_API_KEY set)")
+
+        # AI Studio mode (prepay) — original behaviour / fallback.
+        if not GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY not set in .env")
+        self.client = OpenAI(
+            api_key=GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        )
+        self.model          = GEMINI_MODEL
+        self.headline_model = GEMINI_MODEL
         self._semaphore     = threading.Semaphore(1)
 
     def generate_news_script(self, input_text: str, structure_hint: dict = None, target_words: int = None) -> Optional[str]:

@@ -1879,13 +1879,22 @@ def build_multi_media_news_segment(
     CLIP_MIN     = 3.0
     CLIP_DEFAULT = clip_end - clip_start   # use full editorial window
  
+    # HARD CAP: item (intro+clip+analysis) ≤ ITEM_MAX_DUR. Audio (intro/analysis)
+    # kabhi trim nahi — clip shrink/drop hoke 59s cap absorb karta hai. (Clip <3s
+    # ho to neeche [B] block khud drop kar deta hai → intro+analysis only, audio intact.)
+    ITEM_MAX_DUR = 59.0
+    room = max(0.0, ITEM_MAX_DUR - intro_tts_dur - analysis_tts_dur)  # clip ke liye bachi jagah
+
     if allocated_duration and allocated_duration > 0:
         # Remaining time after TTS = budget available for the clip
         clip_budget = allocated_duration - intro_tts_dur - analysis_tts_dur
-        clip_budget = max(CLIP_MIN, clip_budget)
     else:
         clip_budget = CLIP_DEFAULT
- 
+    clip_budget = min(clip_budget, room)              # 59s cap (audio intact)
+    if room >= CLIP_MIN:
+        clip_budget = max(CLIP_MIN, clip_budget)      # normal: visible clip floor
+    # room < CLIP_MIN → floor nahi (warna item 59s cross); jitni jagah utni clip
+
     # Cap by actual video duration available after clip_start
     if clip_video_path and os.path.exists(clip_video_path):
         video_total_dur   = _video_duration(clip_video_path)
@@ -1893,8 +1902,8 @@ def build_multi_media_news_segment(
         clip_final_dur    = min(clip_budget, max_from_video)
     else:
         clip_final_dur = min(clip_budget, CLIP_DEFAULT)
- 
-    clip_final_dur = max(CLIP_MIN, clip_final_dur)
+
+    clip_final_dur = max(0.0, min(clip_final_dur, room))   # never exceed 59s cap (floor removed)
     clip_use_end   = clip_start + clip_final_dur
  
     print(f"  📐 Clip budget: intro={intro_tts_dur:.1f}s + analysis={analysis_tts_dur:.1f}s "
@@ -2427,14 +2436,23 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
             intro_tts_dur    = _audio_duration(intro_ap)    if intro_ap    else 0.0
             analysis_tts_dur = _audio_duration(analysis_ap) if analysis_ap else 0.0
  
+            # HARD CAP: item (intro+clip+analysis) ≤ ITEM_MAX_DUR. Audio (intro/analysis)
+            # kabhi trim nahi — clip shrink/drop hoke 59s cap absorb karta hai.
+            ITEM_MAX_DUR = 59.0
+            room = max(0.0, ITEM_MAX_DUR - intro_tts_dur - analysis_tts_dur)  # clip ke liye bachi jagah
+
             if alloc > 0:
-                clip_budget = max(5.0, alloc - hdur - intro_tts_dur - analysis_tts_dur)
+                clip_budget = alloc - hdur - intro_tts_dur - analysis_tts_dur
             else:
                 clip_budget = clip_dur
- 
+            clip_budget = min(clip_budget, room)          # 59s cap (audio intact)
+            if room >= 5.0:
+                clip_budget = max(5.0, clip_budget)       # normal: visible clip floor
+            # room < 5s → floor nahi (warna item 59s cross); jitni jagah utni clip
+
             video_total_dur = _video_duration(media_file)
             max_from_video  = max(0.0, video_total_dur - clip_start)
-            final_clip_dur  = max(5.0, min(clip_budget, max_from_video))
+            final_clip_dur  = max(0.0, min(clip_budget, max_from_video, room))
             clip_use_end    = clip_start + final_clip_dur
  
             # Intro TTS — reporter card CHAHIYE
@@ -2449,15 +2467,23 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
             intro_ok = build_news_segment(media_file, intro_ap, logo_path, tts_intro_seg,
                                         reporter_info=clip_reporter_info)
  
-            # Real clip — logo WITH fix
-            clip_seg = os.path.join(segments_dir, f'{str(seg_idx).zfill(3)}_clip_{rank:02d}.mp4')
-            seg_idx += 1
- 
+            # Real clip — narration ne ~59s bhar di (room < 1.5s) to clip DROP:
+            # intro+analysis only chalega, audio (intro/analysis) poora & intact rahega.
+            _drop_clip = final_clip_dur < 1.5
+            if _drop_clip:
+                clip_seg = None
+            else:
+                clip_seg = os.path.join(segments_dir, f'{str(seg_idx).zfill(3)}_clip_{rank:02d}.mp4')
+                seg_idx += 1
+
             _has_logo   = bool(logo_path and os.path.exists(logo_path))
             _logo_ext   = Path(logo_path).suffix.lower() if logo_path else ''
             _logo_video = _logo_is_animated(logo_path)
 
-            if _has_logo:
+            if _drop_clip:
+                clip_ok = False
+                print(f"  ✂️ rank={rank} clip dropped (narration ~fills 59s) → intro+analysis only, audio intact")
+            elif _has_logo:
                 _logo_inputs = _logo_input_args(logo_path, final_clip_dur)
                 _logo_scale  = (f'[1:v]scale=500:-1,fps={FPS},format=yuva420p[logo];'
                                 if _logo_video else f'[1:v]scale=500:-1,format=yuva420p[logo];')
