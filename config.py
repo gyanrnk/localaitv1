@@ -834,6 +834,7 @@ _SYSTEM_FONT_SUBSTITUTES = {
 _S3_SYNC_FOLDERS = [
     'assets/anchors',       # welcome anchor pool (intro ke baad)
     'assets/anchors_end',   # ending anchor pool (news ke baad, filler se pehle)
+    'assets/ads',           # per-channel ad-ticker text: assets/ads/<channel>/*.txt
 ]
 
 
@@ -916,18 +917,22 @@ def ensure_assets():
                     key = obj['Key']
                     if key.endswith('/'):
                         continue  # skip the folder placeholder
-                    fname = os.path.basename(key)
-                    if not fname:
+                    # Preserve subfolder structure (rel path under the prefix) so
+                    # per-channel dirs like ads/kurnool/kurnool_ads.txt land as
+                    # assets/ads/kurnool/kurnool_ads.txt (NOT flattened).
+                    rel = key[len(prefix):]
+                    if not rel:
                         continue
-                    dst = os.path.join(local_dir, fname)
+                    dst = os.path.join(local_dir, *rel.split('/'))
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
                     # download if missing or size differs (self-heal)
                     if os.path.exists(dst) and os.path.getsize(dst) == int(obj.get('Size', -1)):
                         continue
                     try:
                         s3.download_file(S3_BUCKET_NAME, key, dst)
-                        print(f"[assets] ✅ Synced {folder}/{fname}")
+                        print(f"[assets] ✅ Synced {folder}/{rel}")
                     except Exception as e:
-                        print(f"[assets] ⚠️ Could not sync {folder}/{fname}: {e}")
+                        print(f"[assets] ⚠️ Could not sync {folder}/{rel}: {e}")
         except Exception as e:
             print(f"[assets] ⚠️ Folder sync failed for {folder}: {e}")
 # ─────────────────────────────────────────────────────────────────────────────

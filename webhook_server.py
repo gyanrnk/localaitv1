@@ -835,35 +835,27 @@ def _run_planner():
         from datetime import datetime, timedelta, timezone
         import db as _db
 
-        _db_headlines = []
+        # Per-LOCATION DB headlines (location-filtered supplement). Keyed by
+        # news_items.location_id (backend id) → each channel only picks ITS own
+        # location's headlines (no all-location pollution — Kurnool no longer shows
+        # other districts' / national news in its ticker).
+        _db_headlines_by_loc = {}   # str(location_id) -> [headlines]
         try:
             _all_meta = _db.fetchall(
-                "SELECT headline, timestamp FROM news_items "
+                "SELECT headline, location_id FROM news_items "
                 "WHERE timestamp::timestamptz >= NOW() - INTERVAL '24 hours' "
                 "ORDER BY counter ASC"
             )
-            _seen_db = set()
             for item in _all_meta:
                 h = (item.get('headline') or '').strip()
-                if h and h not in _seen_db:
-                    _seen_db.add(h)
-                    _db_headlines.append(h)
+                if not h:
+                    continue
+                lid = str(item.get('location_id') or '')
+                lst = _db_headlines_by_loc.setdefault(lid, [])
+                if h not in lst:
+                    lst.append(h)
         except Exception as _e:
             logger.warning(f"⚠️ [TICKER] DB fetch failed: {_e}")
-
-        # Fallback: if 24hr window empty, grab latest 50
-        if not _db_headlines:
-            try:
-                _seen_db2 = set()
-                for item in _db.fetchall(
-                    "SELECT headline FROM news_items ORDER BY counter DESC LIMIT 50"
-                ):
-                    h = (item.get('headline') or '').strip()
-                    if h and h not in _seen_db2:
-                        _seen_db2.add(h)
-                        _db_headlines.append(h)
-            except Exception:
-                pass
         # ─────────────────────────────────────────────────────────────────────
 
 
@@ -927,8 +919,14 @@ def _run_planner():
                 if h and h not in _loc_seen:
                     _loc_seen.add(h)
                     _loc_headlines.append(h)
-            # Supplement with DB headlines from all locations
-            for h in _db_headlines:
+            # Supplement with THIS channel's location-filtered DB headlines ONLY
+            # (channel -> backend location ids -> per-loc headlines). No all-location
+            # pollution: Kurnool ticker shows Kurnool news, not other districts'.
+            from config import channel_backend_ids
+            _ch_db = []
+            for _lid in channel_backend_ids(channel_name):
+                _ch_db += _db_headlines_by_loc.get(str(_lid), [])
+            for h in _ch_db:
                 if h not in _loc_seen:
                     _loc_seen.add(h)
                     _loc_headlines.append(h)
@@ -940,7 +938,7 @@ def _run_planner():
                 if (_it.get('type') == 'news') and (_it.get('headline') or '').strip()
             )
             logger.info(f"📰 [TICKER] {channel_name}: {len(_loc_headlines)} total headlines "
-                        f"({_bulletin_hl_count} from bulletin, {len(_db_headlines)} from DB)")
+                        f"({_bulletin_hl_count} from bulletin, {len(_ch_db)} from DB-loc)")
 
             _build_done = threading.Event()
             _build_result = {'video_path': None, 'error': None}
