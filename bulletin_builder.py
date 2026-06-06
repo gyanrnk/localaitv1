@@ -1709,49 +1709,38 @@ def build_all_location_bulletins(duration_minutes: int) -> dict:
 
     # return results
 
-    # Collect unique raw location names
-    raw_location_names = list({
-        item.get('location_name', '')
-        for item in all_items
-        if item.get('location_name', '')
-    })
-
-    # OpenAI classify → one of 3 canonical channels
-    loc_to_channel = classify_location_to_channel(raw_location_names)
-    print(f"🗺️  Location mapping: {loc_to_channel}")
-
-    # Bucket items by channel
+    # ── DETERMINISTIC routing: location_id (then name) -> channel ─────────────
+    # NO LLM. UNKNOWN location -> SKIP (never default to Kurnool). Each channel uses
+    # ONLY its OWN items — no cross-location "general" fallback (that leaked other
+    # locations' content into a channel). Short channels backfill same-location OLD
+    # items inside build_bulletin.
+    from config import resolve_news_channel
     KNOWN_CHANNELS = {"Karimnagar", "Khammam", "Kurnool",
                       "Anatpur", "Kakinada", "Nalore", "Tirupati",
                       "Guntur", "Warangal", "Nalgonda"}
-    channel_items  = {ch: [] for ch in KNOWN_CHANNELS}
-    general_items  = []  # items that don't match any of the 7 channels
+    channel_items = {ch: [] for ch in KNOWN_CHANNELS}
+    unmatched     = []  # unknown location → NOT routed anywhere (no Kurnool-default)
 
     for item in all_items:
-        raw     = item.get('location_name', '')
-        channel = loc_to_channel.get(raw)
-        if channel and channel in KNOWN_CHANNELS:
+        channel = resolve_news_channel(item.get('location_id'), item.get('location_name', ''))
+        if channel in KNOWN_CHANNELS:
             channel_items[channel].append(item)
         else:
-            general_items.append(item)
+            unmatched.append(item)
 
-    if general_items:
-        print(f"🌐 {len(general_items)} general items (no location match)")
+    _mapping = {ch: len(its) for ch, its in channel_items.items() if its}
+    print(f"🗺️  Deterministic location mapping (items/channel): {_mapping}")
+    if unmatched:
+        print(f"⚠️ {len(unmatched)} items with UNKNOWN location — SKIPPED (not routed to any channel)")
 
     results = {}
     for channel_name, items in channel_items.items():
-        if items:
-            # Channel ke apne items hain — sirf wahi use karo
-            use_items = items
-            print(f"\n{'='*60}\n🏗️  Building bulletin for {channel_name} ({len(items)} own items)\n{'='*60}")
-        elif general_items:
-            # Apne items nahi hain — general items fallback ke roop me use karo
-            use_items = general_items
-            print(f"\n{'='*60}\n🏗️  Building bulletin for {channel_name} (no own items — using {len(general_items)} general items)\n{'='*60}")
-        else:
-            print(f"⚠️ No items for {channel_name}, skipping")
+        if not items:
+            print(f"⚠️ No own items for {channel_name} — skip (notebooklm/filler covers it)")
             continue
-        path = build_bulletin(duration_minutes, location_name=channel_name, _items_override=use_items)
+        # SAME-LOCATION only — channel ke apne items hi (no cross-location borrow)
+        print(f"\n{'='*60}\n🏗️  Building bulletin for {channel_name} ({len(items)} own items)\n{'='*60}")
+        path = build_bulletin(duration_minutes, location_name=channel_name, _items_override=items)
         if path:
             results[channel_name] = {'location_name': channel_name, 'path': path}
 

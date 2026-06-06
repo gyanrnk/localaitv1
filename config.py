@@ -672,6 +672,34 @@ def geo_district_prefix(channel_name):
     dist = str(channel_name).strip().lower().replace(' ', '_').replace('-', '_')
     return f"geo/states/{st}/districts/{dist}"
 
+
+# ── News-bulletin routing: DETERMINISTIC location -> channel ────────────────
+# Backend location_id is authoritative; location_name is a fallback. UNKNOWN -> None
+# (skip — NEVER default to Kurnool; the old LLM classify_location_to_channel defaulted
+# everything to Kurnool on Gemini failure, starving all other channels). Anatpur is
+# intentionally NOT mapped (skip — no content).
+LOCATION_ID_TO_CHANNEL = {
+    "75":  "Karimnagar", "141": "Nalgonda", "154": "Warangal", "161": "Khammam",
+    "209": "Kakinada",   "285": "Nalore",   "305": "Kurnool",  "335": "Tirupati",
+    "344": "Guntur",
+}
+_NEWS_CHANNELS = ["Khammam", "Kurnool", "Karimnagar", "Anatpur", "Kakinada",
+                  "Nalore", "Tirupati", "Guntur", "Warangal", "Nalgonda"]
+
+def resolve_news_channel(location_id, location_name=''):
+    """Deterministic location -> channel for news bulletins.
+    1) backend location_id (authoritative), 2) location_name substring match,
+    3) None (unknown -> SKIP, never Kurnool-default)."""
+    ch = LOCATION_ID_TO_CHANNEL.get(str(location_id).strip())
+    if ch:
+        return ch
+    nl = str(location_name or '').strip().lower()
+    if nl:
+        for c in _NEWS_CHANNELS:
+            if c.lower() in nl:
+                return c
+    return None
+
 # ── Ticker Overlay ────────────────────────────────────────────────────────────
 # ── Item Video Cache ─────────────────────────────────────────────────────────
 # Pre-built item videos stored here so next bulletin can reuse instantly.
