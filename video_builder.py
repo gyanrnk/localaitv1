@@ -1595,6 +1595,38 @@ def build_image_slideshow(image_paths: List[str], audio_path: str,
     Build a slideshow segment: images displayed evenly across audio duration.
     Each image shown for equal time. Logo overlay included.
     """
+    # ── Resolve each image to a usable LOCAL file (portability + S3 fallback) ──
+    # multi_image_paths may contain absolute *container* paths (e.g.
+    # /app/inputs/images/iX.jpg) that don't exist on this host → ffmpeg fails to
+    # open them and the whole slideshow item is dropped. Re-resolve every path by
+    # basename against INPUT_IMAGE_DIR and fall back to an S3 download — the same
+    # strategy find_input_media() already uses for single-image items. A path
+    # that already exists on disk is used as-is, so production (where /app/... is
+    # valid) behaves exactly as before; only missing paths are re-resolved.
+    if image_paths:
+        from config import INPUT_IMAGE_DIR as _IMG_DIR
+        import s3_storage as _s3
+        _resolved = []
+        for _p in image_paths:
+            if _p and os.path.exists(_p):
+                _resolved.append(_p)
+                continue
+            _fname = os.path.basename(_p) if _p else ''
+            if not _fname:
+                continue
+            _local = os.path.join(_IMG_DIR, _fname)
+            if os.path.exists(_local):
+                _resolved.append(_local)
+                continue
+            try:
+                if _s3.download_file(_s3.key_for_input('image', _fname), _local):
+                    _resolved.append(_local)
+                    continue
+            except Exception:
+                pass
+            print(f"  ⚠️ slideshow image unresolved (skipped): {_fname}")
+        image_paths = _resolved
+
     if not image_paths:
         raw_dur  = _audio_duration(audio_path)
         duration = min(raw_dur, max_duration) if max_duration else raw_dur
