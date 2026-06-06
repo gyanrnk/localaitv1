@@ -135,8 +135,12 @@ def _video_duration(path: str) -> float:
 
 # ── Data loaders ──────────────────────────────────────────────────────────────
 
-def _load_24hr_headlines() -> list:
-    """Returns list of headline strings."""
+def _load_24hr_headlines(location_id=None) -> list:
+    """Returns list of headline strings.
+
+    If location_id is given, ONLY that location's (channel's) headlines are
+    returned — so each channel's ticker scrolls its own news. location_id=None
+    keeps the original all-locations behaviour (backward compatible)."""
     # if not os.path.exists(METADATA_FILE):
     #     print("  ⚠️  [TICKER] metadata.json not found")
     #     return ['వార్తలు అందుబాటులో లేవు']
@@ -148,11 +152,27 @@ def _load_24hr_headlines() -> list:
     #     return ['వార్తలు అందుబాటులో లేవు']
     try:
         import db as _db
-        items = _db.fetchall(
-            "SELECT headline, timestamp FROM news_items "
-            "WHERE timestamp::timestamptz >= NOW() - INTERVAL '24 hours' "
-            "ORDER BY counter ASC"
-        )
+        if location_id is not None:
+            # Per-channel: only this location's headlines.
+            items = _db.fetchall(
+                "SELECT headline, timestamp FROM news_items "
+                "WHERE location_id = %s "
+                "AND timestamp::timestamptz >= NOW() - INTERVAL '24 hours' "
+                "ORDER BY counter ASC", (location_id,)
+            )
+            if not items:
+                # 24h window empty for this location → latest 50 for it.
+                items = _db.fetchall(
+                    "SELECT headline, timestamp FROM news_items "
+                    "WHERE location_id = %s ORDER BY counter DESC LIMIT 50",
+                    (location_id,)
+                )
+        else:
+            items = _db.fetchall(
+                "SELECT headline, timestamp FROM news_items "
+                "WHERE timestamp::timestamptz >= NOW() - INTERVAL '24 hours' "
+                "ORDER BY counter ASC"
+            )
     except Exception as e:
         print(f"  ⚠️  [TICKER] DB load error: {e}")
         return ['వార్తలు అందుబాటులో లేవు']
