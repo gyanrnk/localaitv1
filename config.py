@@ -605,6 +605,49 @@ def get_loc_id_from_address(address: str) -> int:
     hash_id = int(_hashlib.md5(addr_lower.encode()).hexdigest()[:5], 16) + 10000
     return hash_id
 
+
+# ── Classified-form location bulletins (EXT bucket) ─────────────────────────
+# EXT bucket stores classified videos as {form}/outputs/{backend_id}/...
+# These BACKEND ids are a SEPARATE id-space from LOCATION_MAP (1..41) — resolved
+# ONCE via GET /api/locations/{id}, baked here. Runtime NEVER calls the API.
+# NOTE: backend 75/141/... are unrelated to LOCATION_MAP's 1..41 — keep separate.
+CLASSIFIED_LOCATION_MAP = {
+    # "<backend_id>": {"channel": "<stream channel key>", "telugu": "<name>"}
+    "75":  {"channel": "karimnagar", "telugu": "కరీంనగర్"},
+    "141": {"channel": "nalgonda",   "telugu": "నల్గొండ"},
+    "154": {"channel": "warangal",   "telugu": "వరంగల్"},
+    "161": {"channel": "khammam",    "telugu": "ఖమ్మం"},     # content hai, par stream channel nahi (abhi skip)
+    "285": {"channel": "nellore",    "telugu": "నెల్లూరు"},
+    "305": {"channel": "kurnool",    "telugu": "కర్నూలు"},
+    "344": {"channel": "guntur",     "telugu": "గుంటూరు"},
+}
+
+# Reverse: stream channel (lowercased) -> [backend location ids] feeding it.
+CHANNEL_LOCATION_IDS = {}
+for _bid, _v in CLASSIFIED_LOCATION_MAP.items():
+    CHANNEL_LOCATION_IDS.setdefault(_v["channel"], []).append(_bid)
+# CHANNEL_DEFS me Nellore(285) ka stream channel naam "Nalore" hai → alias.
+if "nellore" in CHANNEL_LOCATION_IDS:
+    CHANNEL_LOCATION_IDS.setdefault("nalore", CHANNEL_LOCATION_IDS["nellore"])
+
+_CLASSIFIED_FALLBACK = ("unknown", "స్థానిక వార్తలు")
+
+def get_classified_location(loc_id):
+    """backend location_id (int|str) -> (channel_key, telugu_name). Safe fallback,
+    never raises (unknown / 'all' / 'None' / '' -> generic)."""
+    key = str(loc_id).strip()
+    if not key or key.lower() in ("all", "none"):
+        return _CLASSIFIED_FALLBACK
+    e = CLASSIFIED_LOCATION_MAP.get(key)
+    if not e:
+        return _CLASSIFIED_FALLBACK
+    return (e.get("channel") or _CLASSIFIED_FALLBACK[0],
+            e.get("telugu")  or _CLASSIFIED_FALLBACK[1])
+
+def channel_backend_ids(channel_name):
+    """stream channel name -> [backend location ids] (empty list if none)."""
+    return CHANNEL_LOCATION_IDS.get(str(channel_name).strip().lower(), [])
+
 # ── Ticker Overlay ────────────────────────────────────────────────────────────
 # ── Item Video Cache ─────────────────────────────────────────────────────────
 # Pre-built item videos stored here so next bulletin can reuse instantly.
