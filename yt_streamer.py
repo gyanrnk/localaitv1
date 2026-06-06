@@ -226,38 +226,46 @@ def _s3_client_main():
 
 
 def fetch_latest_program(channel_name: str, kind: str) -> "Path | None":
-    """MAIN bucket `notebooklm/{Channel}/{kind}/` se latest .mp4 download.
-    kind = 'local' | 'district' | ... (subfolder = bulletin type). None agar koi nahi."""
+    """Latest notebooklm .mp4 for a channel+kind, downloaded + cached locally.
+    Reads the NEW geo/ district path FIRST
+    (geo/states/{state}/districts/{channel}/{kind}/notebooklm/), then falls back to the
+    LEGACY notebooklm/{Channel}/{kind}/ path. 'Latest' = filename natural-sort, tie on
+    LastModified (dated names like notebooklm_2026-06-07.mp4 win; multiple files kept).
+    kind = 'local' | 'district'. Returns Path or None."""
     if not S3_BUCKET_MAIN:
         debug("program: S3_BUCKET_NAME not set"); return None
-    prefix = f"notebooklm/{channel_name}/{kind}/"
-    try:
-        res  = _s3_client_main().list_objects_v2(Bucket=S3_BUCKET_MAIN, Prefix=prefix)
-        mp4s = [o for o in res.get("Contents", []) if o["Key"].endswith(".mp4") and o["Size"] > 0]
-        if not mp4s:
-            debug(f"[{channel_name}/{kind}] no file in {prefix}")
-            return None
-        # MULTIPLE files keep kar sakte ho — purana delete karne ki zaroorat NAHI.
-        # Latest = filename ke natural-sort se (notebooklm_2026-06-06 > _2026-06-05),
-        # tie pe LastModified. Naam date/number se badhta hua rakho:
-        #   notebooklm_2026-06-06.mp4  ya  notebooklm_2026-06-06_1430.mp4
-        latest   = max(mp4s, key=lambda o: (_natural_sort_key(o["Key"]), o["LastModified"]))
-        # cache name me channel+kind taaki same filename (notebooklm.mp4) alag kinds me na takraye
-        safe     = f"{channel_name.lower()}_{kind}_" + Path(latest["Key"]).name
-        local    = NOTEBOOKLM_CACHE_DIR.resolve() / safe
-        s3_mtime = latest["LastModified"].timestamp()
-        # Re-download if missing OR S3 version newer (fixed-name daily overwrite → stale cache se bacho)
-        fresh = (local.exists() and local.stat().st_size > 100_000
-                 and local.stat().st_mtime >= s3_mtime)
-        if not fresh:
-            _s3_client_main().download_file(S3_BUCKET_MAIN, latest["Key"], str(local))
-            debug(f"[{channel_name}/{kind}] downloaded (fresh): {local.name}")
-        else:
-            debug(f"[{channel_name}/{kind}] cache hit: {local.name}")
-        return local
-    except (BotoCoreError, ClientError) as e:
-        debug(f"[{channel_name}/{kind}] program fetch error: {e}")
-        return None
+
+    from config import geo_district_prefix
+    prefixes = []
+    gp = geo_district_prefix(channel_name)
+    if gp:
+        prefixes.append(f"{gp}/{kind}/notebooklm/")        # geo (new — primary)
+    prefixes.append(f"notebooklm/{channel_name}/{kind}/")  # legacy (fallback)
+
+    for prefix in prefixes:
+        try:
+            res  = _s3_client_main().list_objects_v2(Bucket=S3_BUCKET_MAIN, Prefix=prefix)
+            mp4s = [o for o in res.get("Contents", []) if o["Key"].endswith(".mp4") and o["Size"] > 0]
+            if not mp4s:
+                continue
+            latest   = max(mp4s, key=lambda o: (_natural_sort_key(o["Key"]), o["LastModified"]))
+            # cache name me channel+kind taaki same filename alag kinds me na takraye
+            safe     = f"{channel_name.lower()}_{kind}_" + Path(latest["Key"]).name
+            local    = NOTEBOOKLM_CACHE_DIR.resolve() / safe
+            s3_mtime = latest["LastModified"].timestamp()
+            fresh = (local.exists() and local.stat().st_size > 100_000
+                     and local.stat().st_mtime >= s3_mtime)
+            if not fresh:
+                _s3_client_main().download_file(S3_BUCKET_MAIN, latest["Key"], str(local))
+                debug(f"[{channel_name}/{kind}] downloaded (fresh): {local.name} [{prefix}]")
+            else:
+                debug(f"[{channel_name}/{kind}] cache hit: {local.name} [{prefix}]")
+            return local
+        except (BotoCoreError, ClientError) as e:
+            debug(f"[{channel_name}/{kind}] program fetch error [{prefix}]: {e}")
+            continue
+    debug(f"[{channel_name}/{kind}] no notebooklm in geo or legacy path")
+    return None
 
 
 def build_program_bulletin(channel_name: str, kind: str,

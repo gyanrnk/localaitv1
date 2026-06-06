@@ -2216,6 +2216,103 @@ def _process_batch_background(batch_items: list, batch_id: str):
     threading.Thread(target=_run_planner, daemon=True).start()
 
 
+# ── NotebookLM bulletins (geo/ S3) — admin upload + UI list ─────────────────
+def _check_admin_token() -> bool:
+    """Bearer token must match BULLETIN_API_TOKEN or LOCALAITV_API_TOKEN."""
+    auth = request.headers.get('Authorization', '')
+    tok  = auth[7:].strip() if auth.startswith('Bearer ') else ''
+    valid = {os.getenv('BULLETIN_API_TOKEN', ''), os.getenv('LOCALAITV_API_TOKEN', '')}
+    valid.discard('')
+    return bool(tok) and tok in valid
+
+
+@app.route('/api/notebooklm/presign', methods=['POST'])
+def notebooklm_presign():
+    """Admin uploads a NotebookLM bulletin. Returns a presigned S3 PUT URL for the
+    geo/ key derived from {scope, state?, district?, kind?, filename}. Frontend then
+    PUTs the .mp4 to uploadUrl with header Content-Type: video/mp4.
+    Body: { scope: national|state|district, state?, district?, kind?: local|district,
+            filename: 'notebooklm_2026-06-07.mp4' }. Auth: Bearer admin token."""
+    if not _check_admin_token():
+        return jsonify({'status': 'error', 'message': 'unauthorized'}), 401
+    data = request.get_json(silent=True) or {}
+    fname = (data.get('filename') or '').strip()
+    if not fname.lower().endswith('.mp4'):
+        return jsonify({'status': 'error', 'message': 'filename must end with .mp4'}), 400
+    from config import notebooklm_geo_key
+    key = notebooklm_geo_key(data.get('scope'), data.get('state', ''),
+                             data.get('district', ''), data.get('kind', ''), fname)
+    if not key:
+        return jsonify({'status': 'error',
+                        'message': 'invalid scope/state/district/kind for this scope'}), 400
+    try:
+        import s3_storage as _s3
+        url = _s3._get_client().generate_presigned_url(
+            'put_object',
+            Params={'Bucket': _s3._bucket(), 'Key': key, 'ContentType': 'video/mp4'},
+            ExpiresIn=3600,
+        )
+        logger.info(f"[notebooklm] presign → {key}")
+        return jsonify({'status': 'ok', 'uploadUrl': url, 'key': key,
+                        'contentType': 'video/mp4', 'expiresIn': 3600}), 200
+    except Exception as e:
+        logger.error(f"[notebooklm presign] {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/notebooklm', methods=['GET'])
+def notebooklm_list():
+    """List NotebookLM bulletins from the geo/ structure. Optional filters:
+    ?scope=national|state|district & state= & district= & kind=local|district.
+    Returns each item + a presigned GET url (1h) for playback."""
+    import s3_storage as _s3
+    cl, bkt = _s3._get_client(), _s3._bucket()
+    scope_f = (request.args.get('scope') or '').lower()
+    state_f = (request.args.get('state') or '').lower()
+    dist_f  = (request.args.get('district') or '').lower()
+    kind_f  = (request.args.get('kind') or '').lower()
+
+    STATES = {"andhra_pradesh": ["kurnool", "guntur", "kakinada", "nalore", "tirupati", "anatpur"],
+              "telangana":      ["khammam", "karimnagar", "warangal", "nalgonda"]}
+    cands = []  # (scope, state, district, kind, prefix)
+    if scope_f in ('', 'national'):
+        cands.append(('national', '', '', '', 'geo/national/notebooklm/'))
+    for st, dists in STATES.items():
+        if state_f and st != state_f:
+            continue
+        if scope_f in ('', 'state'):
+            cands.append(('state', st, '', '', f'geo/states/{st}/_state/notebooklm/'))
+        if scope_f in ('', 'district'):
+            for d in dists:
+                if dist_f and d != dist_f:
+                    continue
+                for k in ('local', 'district'):
+                    if kind_f and k != kind_f:
+                        continue
+                    cands.append(('district', st, d, k,
+                                  f'geo/states/{st}/districts/{d}/{k}/notebooklm/'))
+
+    items = []
+    for scope, st, d, k, prefix in cands:
+        try:
+            res = cl.list_objects_v2(Bucket=bkt, Prefix=prefix)
+            for o in res.get('Contents', []):
+                if not o['Key'].endswith('.mp4') or o['Size'] <= 0:
+                    continue
+                url = cl.generate_presigned_url(
+                    'get_object', Params={'Bucket': bkt, 'Key': o['Key']}, ExpiresIn=3600)
+                items.append({
+                    'scope': scope, 'state': st, 'district': d, 'kind': k,
+                    'filename': o['Key'].split('/')[-1], 'key': o['Key'],
+                    'url': url, 'size': o['Size'],
+                    'lastModified': o['LastModified'].isoformat(),
+                })
+        except Exception as e:
+            logger.warning(f"[notebooklm list] {prefix}: {e}")
+    items.sort(key=lambda x: x['lastModified'], reverse=True)
+    return jsonify({'status': 'ok', 'count': len(items), 'items': items}), 200
+
+
 @app.route('/api/webhooks/batch', methods=['POST'])
 def receive_batch_webhook():
     """

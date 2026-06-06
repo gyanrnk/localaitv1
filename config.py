@@ -700,6 +700,37 @@ def resolve_news_channel(location_id, location_name=''):
                 return c
     return None
 
+
+# ── NotebookLM upload: geo/ S3 key by scope (admin upload API) ──────────────
+_GEO_STATES    = ("andhra_pradesh", "telangana")
+_GEO_DISTRICTS = {
+    "andhra_pradesh": {"kurnool", "guntur", "kakinada", "nalore", "tirupati", "anatpur"},
+    "telangana":      {"khammam", "karimnagar", "warangal", "nalgonda"},
+}
+
+def notebooklm_geo_key(scope, state='', district='', kind='', filename='notebooklm.mp4'):
+    """Compute the geo/ S3 key for a notebooklm upload by scope.
+      national : geo/national/notebooklm/<file>
+      state    : geo/states/<state>/_state/notebooklm/<file>
+      district : geo/states/<state>/districts/<district>/<local|district>/notebooklm/<file>
+    Returns None if the scope's required fields are missing/invalid."""
+    scope = (scope or '').strip().lower()
+    fn    = (filename or '').strip() or 'notebooklm.mp4'
+    st    = (state or '').strip().lower()
+    d     = (district or '').strip().lower().replace(' ', '_').replace('-', '_')
+    k     = (kind or '').strip().lower()
+    if scope == 'national':
+        return f"geo/national/notebooklm/{fn}"
+    if scope == 'state':
+        if st not in _GEO_STATES:
+            return None
+        return f"geo/states/{st}/_state/notebooklm/{fn}"
+    if scope == 'district':
+        if st not in _GEO_STATES or d not in _GEO_DISTRICTS.get(st, set()) or k not in ('local', 'district'):
+            return None
+        return f"geo/states/{st}/districts/{d}/{k}/notebooklm/{fn}"
+    return None
+
 # ── Ticker Overlay ────────────────────────────────────────────────────────────
 # ── Item Video Cache ─────────────────────────────────────────────────────────
 # Pre-built item videos stored here so next bulletin can reuse instantly.
