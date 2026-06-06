@@ -189,9 +189,21 @@ def _load_24hr_headlines() -> list:
     return texts
 
 
-def _load_ad_texts() -> str:
+def _load_ad_texts(channel_name: str = '') -> str:
     os.makedirs(ADS_FOLDER_PATH, exist_ok=True)
-    files = sorted(glob.glob(os.path.join(ADS_FOLDER_PATH, '*.txt')))
+    # Per-channel ads first: assets/ads/<channel_key>/*.txt. Falls back to the
+    # global top-level assets/ads/*.txt when a channel has no own folder/files,
+    # so existing single-folder setups keep working unchanged.
+    files = []
+    if channel_name:
+        channel_key = channel_name.lower().replace(' ', '_').replace('-', '_')
+        ch_dir = os.path.join(ADS_FOLDER_PATH, channel_key)
+        if os.path.isdir(ch_dir):
+            files = sorted(glob.glob(os.path.join(ch_dir, '*.txt')))
+            if files:
+                print(f"  ✅ [TICKER] per-channel ads: {channel_key}/ ({len(files)} file(s))")
+    if not files:
+        files = sorted(glob.glob(os.path.join(ADS_FOLDER_PATH, '*.txt')))
     if not files:
         print("  ⚠️  [TICKER] No ad files found")
         return ' '
@@ -586,7 +598,8 @@ def _concat_clips(clips: list, out: str):
 def add_ticker_overlay(video_path: str, out_path: str,
                        filler_start: float = None,
                        skip_ranges: list = None,
-                       ticker_text: str = None) -> bool:
+                       ticker_text: str = None,
+                       channel_name: str = '') -> bool:
     import time as _time
 
     print("\n" + "─" * 50)
@@ -611,7 +624,7 @@ def add_ticker_overlay(video_path: str, out_path: str,
         print(f"  ✅ [TICKER] {len(headlines)} headlines from ticker_text arg")
     else:
         headlines = _load_24hr_headlines()
-    ad_text   = _load_ad_texts()
+    ad_text   = _load_ad_texts(channel_name)
 
     try:
         duration = _video_duration(video_path)
