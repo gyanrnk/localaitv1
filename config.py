@@ -648,6 +648,30 @@ def channel_backend_ids(channel_name):
     """stream channel name -> [backend location ids] (empty list if none)."""
     return CHANNEL_LOCATION_IDS.get(str(channel_name).strip().lower(), [])
 
+
+# ── Channel → State (for geo/ S3 structure) ─────────────────────────────────
+CHANNEL_STATE = {
+    "kurnool": "andhra_pradesh", "guntur": "andhra_pradesh", "kakinada": "andhra_pradesh",
+    "nalore": "andhra_pradesh", "nellore": "andhra_pradesh", "tirupati": "andhra_pradesh",
+    "anatpur": "andhra_pradesh", "anantapur": "andhra_pradesh",
+    "khammam": "telangana", "karimnagar": "telangana", "warangal": "telangana",
+    "nalgonda": "telangana",
+}
+
+def channel_state(channel_name):
+    """stream channel -> state key (for geo/ paths), or None."""
+    return CHANNEL_STATE.get(str(channel_name).strip().lower())
+
+def geo_district_prefix(channel_name):
+    """geo/ prefix for a channel's district folder (MAIN bucket), or None if
+    the channel's state is unknown. e.g. Kurnool ->
+    'geo/states/andhra_pradesh/districts/kurnool'."""
+    st = channel_state(channel_name)
+    if not st:
+        return None
+    dist = str(channel_name).strip().lower().replace(' ', '_').replace('-', '_')
+    return f"geo/states/{st}/districts/{dist}"
+
 # ── Ticker Overlay ────────────────────────────────────────────────────────────
 # ── Item Video Cache ─────────────────────────────────────────────────────────
 # Pre-built item videos stored here so next bulletin can reuse instantly.

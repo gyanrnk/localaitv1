@@ -1232,6 +1232,32 @@ def _exit_reason(rc):
 
 MIN_BULLETINS = 5
 
+
+def _get_filler_path(channel_name):
+    """Per-location filler from geo/ (MAIN bucket), cached locally + cache-fresh.
+    geo/states/{state}/districts/{channel}/filler/filler.mp4 → mile to wahi, warna
+    global FILLER_FILE (assets/filler.mp4) fallback. Returns Path | None."""
+    from config import geo_district_prefix
+    pref = geo_district_prefix(channel_name)
+    if pref and S3_BUCKET_MAIN:
+        key   = f"{pref}/filler/filler.mp4"
+        dist  = channel_name.lower().replace(' ', '_').replace('-', '_')
+        local = INJECT_CACHE_DIR / f"geo_filler_{dist}.mp4"
+        try:
+            head     = _s3_client_main().head_object(Bucket=S3_BUCKET_MAIN, Key=key)
+            s3_mtime = head["LastModified"].timestamp()
+            fresh    = (local.exists() and local.stat().st_size > 50_000
+                        and local.stat().st_mtime >= s3_mtime)
+            if not fresh:
+                _s3_client_main().download_file(S3_BUCKET_MAIN, key, str(local))
+                debug(f"[{channel_name}] geo filler (fresh): {local.name}")
+            if local.exists() and local.stat().st_size > 50_000:
+                return local
+        except (BotoCoreError, ClientError):
+            debug(f"[{channel_name}] no geo filler — global fallback")
+    return FILLER_FILE if FILLER_FILE.exists() else None
+
+
 def _with_fallback(folder, channel_name):
     primary = get_all_bulletins(folder)
     if len(primary) >= MIN_BULLETINS:
@@ -1255,9 +1281,10 @@ def _with_fallback(folder, channel_name):
     if intro:
         debug(f"[{channel_name}] No bulletins — intro-only loop: {intro.name}")
         return [intro]
-    if FILLER_FILE.exists():
-        debug(f"[{channel_name}] No intro found — filler loop")
-        return [FILLER_FILE]
+    filler = _get_filler_path(channel_name)   # per-location geo filler, global fallback
+    if filler:
+        debug(f"[{channel_name}] No intro — filler loop: {filler.name}")
+        return [filler]
     return []
 
 
