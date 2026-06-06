@@ -427,17 +427,45 @@ def _render_strip(browser, html: str, band_h: int, out_path: str,
         }""")
         page.close()
 
-        tile_w = min(max(int(actual_w), MIN_TILE_W), MAX_CANVAS)
-        print(f"  [TICKER] {label}: measured={actual_w}px -> tile_w={tile_w}px")
+        full_tile_w = max(int(actual_w), MIN_TILE_W)
+        print(f"  [TICKER] {label}: measured={actual_w}px -> tile_w={full_tile_w}px")
 
-        # Pass 2 — render at exact tile width (viewport = content width → no blank tail).
-        page = browser.new_page(viewport={"width": tile_w, "height": band_h})
-        page.goto(html_uri, wait_until="networkidle")
-        page.evaluate("() => document.fonts.ready")
-        page.screenshot(path=tmp_png_path)
-        page.close()
+        if full_tile_w <= MAX_CANVAS:
+            # Pass 2 — render at exact tile width (viewport = content width).
+            page = browser.new_page(viewport={"width": full_tile_w, "height": band_h})
+            page.goto(html_uri, wait_until="networkidle")
+            page.evaluate("() => document.fonts.ready")
+            page.screenshot(path=tmp_png_path)
+            page.close()
+            img = Image.open(tmp_png_path).convert('RGBA')
+        else:
+            # Chromium caps its render surface at ~16384px, so a long ad line was
+            # being CUT (only the first chunk showed, rest lost). Render the strip
+            # in horizontal chunks — shift the text left via translateX and grab
+            # each window — then stitch with PIL (no width limit) so the FULL ad
+            # text is preserved end-to-end, nothing truncated.
+            import math as _math
+            n_chunks = _math.ceil(full_tile_w / MAX_CANVAS)
+            print(f"  [TICKER] {label}: {full_tile_w}px > {MAX_CANVAS}px cap → stitching {n_chunks} chunks (no cut)")
+            img = Image.new('RGBA', (full_tile_w, band_h), (0, 0, 0, 0))
+            for _k in range(n_chunks):
+                seg_w = min(MAX_CANVAS, full_tile_w - _k * MAX_CANVAS)
+                pg = browser.new_page(viewport={"width": seg_w, "height": band_h})
+                pg.goto(html_uri, wait_until="networkidle")
+                pg.evaluate("() => document.fonts.ready")
+                pg.evaluate("""(dx) => {
+                    document.documentElement.style.width = 'auto';
+                    document.body.style.width = 'auto';
+                    var t = document.querySelector('.t');
+                    if (t) { t.style.display = 'inline-block';
+                             t.style.transform = 'translateX(-' + dx + 'px)'; }
+                }""", _k * MAX_CANVAS)
+                pg.screenshot(path=tmp_png_path)
+                pg.close()
+                seg_img = Image.open(tmp_png_path).convert('RGBA')
+                img.paste(seg_img, (_k * MAX_CANVAS, 0))
+                seg_img.close()
 
-        img = Image.open(tmp_png_path).convert('RGBA')
         non_blank = any(a > 0 for a in img.getdata(band=3))
         if not non_blank:
             print(f"  [TICKER] WARNING {label}: strip is blank after render!")
