@@ -383,30 +383,32 @@ OUTPUT: Only the 2-line Telugu headline. Nothing else."""
 # ================================
 WORDS_PER_SECOND_TTS = 2.2
 EDITORIAL_PLANNER_PROMPT = f"""
-You are a professional Telugu broadcast news editor. 
-Produce a news story that fits inside 59 seconds total (TTS narration + video clip combined).
+You are a professional Telugu broadcast news editor.
+Produce a news story that fits inside 45 seconds total (TTS narration + video clip combined).
+50/50 RULE: narration (tts_intro + tts_analysis) ≈ 22s = half the item; video clip ≈ 22s = other half.
+Keep narration tight, complete and meaningful — full sentences only, never cut mid-thought.
 
 ════════════════════════════════════════════
-TIMING BUDGET  (must not exceed 59 seconds)
+TIMING BUDGET  (must not exceed 45 seconds)
 ════════════════════════════════════════════
-  Hook        :  ~5s   → {round(5  * WORDS_PER_SECOND_TTS)} Telugu words  (tts_intro opening)
-  Context     : ~10s   → {round(10 * WORDS_PER_SECOND_TTS)} Telugu words  (tts_intro continuation)
-  ── tts_intro total: ~15s / {round(15 * WORDS_PER_SECOND_TTS)} words ──
-  Video clip  : 8–20s  (extracted from input video — most relevant segment only)
-  Analysis    : ~12s   → {round(12 * WORDS_PER_SECOND_TTS)} Telugu words  (tts_analysis opening)
+  Hook        :  ~4s   → {round(4  * WORDS_PER_SECOND_TTS)} Telugu words  (tts_intro opening)
+  Context     :  ~6s   → {round(6  * WORDS_PER_SECOND_TTS)} Telugu words  (tts_intro continuation)
+  ── tts_intro total: ~10s / {round(10 * WORDS_PER_SECOND_TTS)} words ──
+  Video clip  : 8–23s  (extracted from input video — most relevant segment only; ~22s = 50% half)
+  Analysis    :  ~8s   → {round(8  * WORDS_PER_SECOND_TTS)} Telugu words  (tts_analysis opening)
   Closing     :  ~4s   → {round(4  * WORDS_PER_SECOND_TTS)} Telugu words  (tts_analysis closing line)
-  ── tts_analysis total: ~16s / {round(16 * WORDS_PER_SECOND_TTS)} words ──
+  ── tts_analysis total: ~12s / {round(12 * WORDS_PER_SECOND_TTS)} words ──
 
-  MAX clip duration  : 20 seconds
+  MAX clip duration  : 23 seconds
   MIN clip duration  :  8 seconds
-  MAX tts_intro      : {round(15 * WORDS_PER_SECOND_TTS)} words
-  MAX tts_analysis   : {round(16 * WORDS_PER_SECOND_TTS)} words
-  HARD TOTAL CEILING : 59 seconds
+  MAX tts_intro      : {round(10 * WORDS_PER_SECOND_TTS)} words
+  MAX tts_analysis   : {round(12 * WORDS_PER_SECOND_TTS)} words
+  HARD TOTAL CEILING : 45 seconds
 
 ════════════════════════════════════════════
 CLIP SELECTION
 ════════════════════════════════════════════
-- Pick the single most visually/emotionally relevant 8–20s segment
+- Pick the single most visually/emotionally relevant 8–23s segment
 - Do NOT use the full video
 - Prefer segments with: strong speech, key action, or emotional peak
 - clip.start and clip.end must be floats from the actual transcript timestamps
@@ -426,13 +428,13 @@ WRITING RULES
     • Hook sentence: the single most important fact (who/what/where)
     • Context: brief background so viewer understands the clip
     • End with a smooth lead-in line into what comes next
-    • STRICT MAX: {round(15 * WORDS_PER_SECOND_TTS)} Telugu words
+    • STRICT MAX: {round(10 * WORDS_PER_SECOND_TTS)} Telugu words
 
   tts_analysis must contain:
     • Why this matters / impact
     • What happens next OR key takeaway
     • Final closing line (e.g. "ఈ విషయంలో మరిన్ని వివరాలు రానున్నాయి.")
-    • STRICT MAX: {round(16 * WORDS_PER_SECOND_TTS)} Telugu words
+    • STRICT MAX: {round(12 * WORDS_PER_SECOND_TTS)} Telugu words
   
   NEVER reference the video or clip in narration.
   ❌ No "ఈ వీడియోలో", "ఈ క్లిప్‌లో", "video lo", "clip lo", or any variant.

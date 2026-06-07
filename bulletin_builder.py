@@ -1315,26 +1315,26 @@ CLIP_MAX = 20  # legacy cap (kept for reference)
 # User: news content me clip 50% + narration(intro+analysis) 50%. Headline card
 # alag (montage) hai, isliye 50/50 sirf news-segment (intro+clip+analysis) ka.
 #   → clip = narration (intro+analysis)  ⇒ clip 50%, narration 50%
-# HARD CAP: individual news item (intro+clip+analysis) max 59s. Agar narration
-# lambi ho to clip reduce karke item 59s pe rakho. Editorial window + min-floor
+# HARD CAP: individual news item (intro+clip+analysis) max 45s. Agar narration
+# lambi ho to clip reduce karke item 45s pe rakho. Editorial window + min-floor
 # se bhi bounded.
 CLIP_MIN_DUR = 5.0
-ITEM_MAX_DUR = 59.0   # individual news item (intro+clip+analysis) ka MAX duration
+ITEM_MAX_DUR = 45.0   # individual news item (intro+clip+analysis) ka MAX duration
 
 def _clip_half(window, narration_dur):
     """clip = narration (intro+analysis) → 50/50 news content.
     HARD RULE: audio (intro+analysis) kabhi trim/cut nahi hota — poora & meaningful
-    chalta hai. Item (intro+clip+analysis) ITEM_MAX_DUR (59s) pe capped: narration
-    lambi ho to CLIP shrink/drop karke item 59s pe rakhte hain (audio nahi chhedte).
-      - room = 59 - narration  → clip ke liye bachi jagah
-      - room ≤ 0 (narration hi 59s+ ki): clip = 0 (drop; audio intact)
+    chalta hai. Item (intro+clip+analysis) ITEM_MAX_DUR (45s) pe capped: narration
+    lambi ho to CLIP shrink/drop karke item 45s pe rakhte hain (audio nahi chhedte).
+      - room = 45 - narration  → clip ke liye bachi jagah
+      - room ≤ 0 (narration hi 45s+ ki): clip = 0 (drop; audio intact)
       - warna clip = min(narration[50%], room, editorial-window); CLIP_MIN_DUR floor
         sirf tab lagta hai jab room itni jagah de (floor kabhi cap cross nahi karta)."""
     narr = float(narration_dur)
     room = ITEM_MAX_DUR - narr
     if room <= 0:
         return 0.0
-    target = min(narr, room, float(window))       # 50% rule, 59s-cap + window se bounded
+    target = min(narr, room, float(window))       # 50% rule, 45s-cap + window se bounded
     floor  = min(CLIP_MIN_DUR, room)              # floor room se zyada nahi
     return max(floor, max(0.0, target))
 
@@ -2080,7 +2080,7 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
             intro_dur_actual    = _audio_dur(intro_path_f)    if os.path.exists(intro_path_f)    else float(item.get('script_duration', 0.0)) * 0.5
             analysis_dur_actual = _audio_dur(analysis_path_f) if (analysis_path_f and os.path.exists(analysis_path_f)) else 0.0
 
-            # clip = narration (intro+analysis) → 50/50, item ≤ 59s
+            # clip = narration (intro+analysis) → 50/50, item ≤ 45s
             clip_dur = _clip_half(
                 float(item['clip_end']) - float(item['clip_start']),
                 intro_dur_actual + analysis_dur_actual,
@@ -2277,7 +2277,7 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
         actual_script_slot = script_dur / uniform_atempo if uniform_atempo > 0 else script_dur
 
-        # clip = narration (script) → 50/50, item ≤ 59s
+        # clip = narration (script) → 50/50, item ≤ 45s
         clip_dur     = _clip_half(float(item["clip_end"]) - float(item["clip_start"]),
                                   actual_script_slot) if has_clip else 0.0
 
@@ -2583,7 +2583,7 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         if has_clip:
             actual_intro    = _audio_dur(os.path.join(scripts_dir, intro_dest_name))    if intro_dest_name    else 0.0
             actual_analysis = _audio_dur(os.path.join(scripts_dir, analysis_dest_name)) if analysis_dest_name else 0.0
-            # clip = narration (intro+analysis) → 50/50, item ≤ 59s
+            # clip = narration (intro+analysis) → 50/50, item ≤ 45s
             clip_dur_actual = _clip_half(
                 float(item['clip_end']) - float(item['clip_start']),
                 actual_intro + actual_analysis,
