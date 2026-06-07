@@ -1269,10 +1269,12 @@ def _exit_reason(rc):
 MIN_BULLETINS = 5
 
 
-def _get_filler_path(channel_name):
+def _get_filler_path(channel_name, global_fallback=True):
     """Per-location filler from geo/ (MAIN bucket), cached locally + cache-fresh.
-    geo/states/{state}/districts/{channel}/filler/filler.mp4 → mile to wahi, warna
-    global FILLER_FILE (assets/filler.mp4) fallback. Returns Path | None."""
+    geo/states/{state}/districts/{channel}/filler/filler.mp4 → mile to wahi.
+    global_fallback=True → na mile to global FILLER_FILE (assets/filler.mp4).
+    global_fallback=False → geo na mile to None (caller geo-only chahta hai, taaki
+    Kurnool-branded global filler galti se na chale). Returns Path | None."""
     from config import geo_district_prefix
     pref = geo_district_prefix(channel_name)
     if pref and S3_BUCKET_MAIN:
@@ -1290,7 +1292,10 @@ def _get_filler_path(channel_name):
             if local.exists() and local.stat().st_size > 50_000:
                 return local
         except (BotoCoreError, ClientError):
-            debug(f"[{channel_name}] no geo filler — global fallback")
+            debug(f"[{channel_name}] no geo filler"
+                  + (" — global fallback" if global_fallback else ""))
+    if not global_fallback:
+        return None
     return FILLER_FILE if FILLER_FILE.exists() else None
 
 
@@ -1307,8 +1312,20 @@ def _with_fallback(folder, channel_name):
                 seen.add(str(f)); merged.append(f)
         if merged:
             return merged
-    # No content at all — play pre-encoded combined filler (intro+notebooklm) in a loop.
-    # Combined file is a single seamless MP4, so no concat-switching issues.
+    # No content at all — per-location GEO filler PEHLE (confirmed correct per-channel:
+    # "You Are Watching <Channel> TV"). Ye assets/intro_* (jo Kurnool-branded nikle) +
+    # global filler se pehle hai, taaki har channel apna sahi identifier dikhaye.
+    # geo filler 1080p/Main hota hai → 720p baseline 25fps me normalize (clean -c copy).
+    geo_filler = _get_filler_path(channel_name, global_fallback=False)
+    if geo_filler:
+        norm = NOTEBOOKLM_CACHE_DIR.resolve() / (geo_filler.stem + "_norm.mp4")
+        if norm.exists() and norm.stat().st_mtime < geo_filler.stat().st_mtime:
+            norm.unlink()                       # geo source refresh hua → re-normalize
+        norm = _normalize_for_stream(geo_filler)
+        if norm:
+            debug(f"[{channel_name}] No bulletins — geo filler (per-location): {geo_filler.name}")
+            return [norm]
+    # Geo filler nahi mila — purana fallback: combined (intro+notebooklm) → intro → global.
     combined = _build_combined_filler(channel_name)
     if combined:
         debug(f"[{channel_name}] No bulletins — combined filler: {combined.name}")
