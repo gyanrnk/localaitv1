@@ -347,6 +347,11 @@ def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None
     """NotebookLM program bulletin ko /api/bulletins POST karo — once per build.
     Citizen bulletins jaise hi UI me dikhe. Marker (.sent) se duplicate-send avoid:
     sirf tab bhejo jab ye build pehle nahi bheja gaya (output source se naya)."""
+    # Explicit opt-in: sirf jab PROGRAM_BULLETIN_API_ENABLED=true ho (prod compose me).
+    # Local test (flag absent) is se PRODUCTION /api/bulletins pe accidental POST +
+    # S3 upload NAHI karega — kyunki local .env me real BULLETIN_API_TOKEN hota hai.
+    if os.getenv("PROGRAM_BULLETIN_API_ENABLED", "").lower() not in ("1", "true", "yes"):
+        return
     video_path = Path(video_path)
     if not video_path.exists():
         return
@@ -970,13 +975,13 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
         try:
             nlm_local    = build_program_bulletin(channel_name, "local")
             nlm_district = build_program_bulletin(channel_name, "district")
-            # NOTE: /api/bulletins POST (UI me dikhana) ABHI HOLD pe hai — calls
-            # intentionally DISABLED. Warna build_concat_list chalte hi (local test
-            # ya stream) S3 pe nlm_*.mp4 upload + production POST trigger ho jata.
-            # Un-hold karte waqt _maybe_send_program_to_api(...) calls wapas add karo
-            # + streamer ko BULLETIN_API_TOKEN env do (docker-compose.prod.yml).
-            #   if nlm_local:    _maybe_send_program_to_api(channel_name, "local",    nlm_local)
-            #   if nlm_district: _maybe_send_program_to_api(channel_name, "district", nlm_district)
+            # /api/bulletins POST — notebooklm bulletin ko UI feed me bhejo (citizen
+            # bulletins jaise). build_program_bulletin ka cache + .sent marker mil ke
+            # ensure karte hain: POST sirf EK BAAR per NAYA notebooklm (har cycle nahi).
+            # Gate: PROGRAM_BULLETIN_API_ENABLED=true (sirf prod compose) — local test
+            # me flag absent hone se accidental production POST nahi hota.
+            if nlm_local:    _maybe_send_program_to_api(channel_name, "local",    nlm_local)
+            if nlm_district: _maybe_send_program_to_api(channel_name, "district", nlm_district)
         except Exception as e:
             debug(f"[{label}] program bulletin build error: {e}")
 

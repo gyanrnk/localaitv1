@@ -123,6 +123,9 @@ services:
       - LOCALAITV_API_URL=${LOCALAITV_API_URL}
       - LOCALAITV_API_TOKEN=${LOCALAITV_API_TOKEN}
       - BULLETIN_API_TOKEN=${BULLETIN_API_TOKEN}
+      # Opt-in gate: notebooklm bulletin ko /api/bulletins (UI feed) pe bhejna.
+      # true sirf prod me — local test me absent rehne se accidental POST nahi hota.
+      - PROGRAM_BULLETIN_API_ENABLED=${PROGRAM_BULLETIN_API_ENABLED:-true}
       # Classified location bulletins (streamer reads this — gates the new flow)
       - LOCATION_BULLETINS_ENABLED=${LOCATION_BULLETINS_ENABLED:-false}
       - YOUTUBE_STREAMING_ENABLED=${YOUTUBE_STREAMING_ENABLED:-true}
