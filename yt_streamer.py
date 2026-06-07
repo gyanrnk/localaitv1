@@ -72,6 +72,16 @@ for _ch in CHANNEL_DEFS:
     _ch["watch_dir"] = _wdir(_ch["name"])
     _ch["stream_key"] = os.getenv(_ch["key_env"])
 
+# Channels jo PURA skip karne hain — stream/build/filler kuch nahi, chahe key set ho.
+# Anatpur ka koi real content nahi (no own news, no per-location assets) → fully skip.
+SKIP_CHANNELS = {"anatpur"}
+
+def _active_channels():
+    """Active streaming channels = first STREAM_COUNT, minus SKIP_CHANNELS.
+    Anatpur jaise channels yahan se nikal jaate hain (stream key set ho tab bhi)."""
+    return [c for c in CHANNEL_DEFS[:STREAM_COUNT]
+            if c["name"].lower() not in SKIP_CHANNELS]
+
 INJECT_MAX_SEC = 5 * 60  # 5 minutes
 
 # ── S3 Config ─────────────────────────────────────────────────────────────────
@@ -1342,7 +1352,7 @@ def _with_fallback(folder, channel_name):
 
 
 def _launch_streams(inject_type=None, inject_payload=None):
-    active = CHANNEL_DEFS[:STREAM_COUNT]
+    active = _active_channels()
     procs  = []
     prepare_overlay()
 
@@ -1365,7 +1375,7 @@ def _launch_streams(inject_type=None, inject_payload=None):
 
 
 def _terminate_streams(procs):
-    for proc, ch in zip(procs, CHANNEL_DEFS):
+    for proc, ch in zip(procs, _active_channels()):
         if proc and proc.poll() is None:
             try: proc.terminate(); stream_down(ch["label"])
             except: pass
@@ -1377,7 +1387,7 @@ def run_streamer():
     kill_ffmpeg()
     time.sleep(2)
     debug("=== Streamer Started ===")
-    for ch in CHANNEL_DEFS[:STREAM_COUNT]:
+    for ch in _active_channels():
         debug(f"  {ch['label']} ← {ch['watch_dir']}")
 
     if not CHANNEL_DEFS[0]["stream_key"]:
@@ -1385,8 +1395,8 @@ def run_streamer():
 
     start_background_threads()
 
-    active     = CHANNEL_DEFS[:STREAM_COUNT]
-    procs      = [None] * STREAM_COUNT
+    active     = _active_channels()
+    procs      = [None] * len(active)
     last_buls  = [[] for _ in active]
     last_check = time.time()
     inject_type = inject_payload = None
@@ -1419,7 +1429,7 @@ def run_streamer():
                     else:
                         debug(f"Slot [{seg_type}] — restarting to inject")
                         _terminate_streams(procs)
-                        procs = [None] * STREAM_COUNT
+                        procs = [None] * len(active)
                         inject_type = seg_type; inject_payload = payload
                         break
 
