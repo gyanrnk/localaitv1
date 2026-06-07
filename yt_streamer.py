@@ -231,16 +231,24 @@ def fetch_latest_program(channel_name: str, kind: str) -> "Path | None":
     (geo/states/{state}/districts/{channel}/{kind}/notebooklm/), then falls back to the
     LEGACY notebooklm/{Channel}/{kind}/ path. 'Latest' = filename natural-sort, tie on
     LastModified (dated names like notebooklm_2026-06-07.mp4 win; multiple files kept).
-    kind = 'local' | 'district'. Returns Path or None."""
+    kind = 'local' | 'district' | 'state' ('state' reads geo/states/{state}/_state/
+    notebooklm/ — state-wide, fans out to every district channel). Returns Path or None."""
     if not S3_BUCKET_MAIN:
         debug("program: S3_BUCKET_NAME not set"); return None
 
-    from config import geo_district_prefix
+    from config import geo_district_prefix, geo_state_prefix
     prefixes = []
-    gp = geo_district_prefix(channel_name)
-    if gp:
-        prefixes.append(f"{gp}/{kind}/notebooklm/")        # geo (new — primary)
-    prefixes.append(f"notebooklm/{channel_name}/{kind}/")  # legacy (fallback)
+    if kind == "state":
+        # State-wide notebooklm — geo/states/{state}/_state/notebooklm/ se har
+        # district ke local+district channel me fan-out (legacy path nahi hota).
+        sp = geo_state_prefix(channel_name)
+        if sp:
+            prefixes.append(f"{sp}/notebooklm/")
+    else:
+        gp = geo_district_prefix(channel_name)
+        if gp:
+            prefixes.append(f"{gp}/{kind}/notebooklm/")        # geo (new — primary)
+        prefixes.append(f"notebooklm/{channel_name}/{kind}/")  # legacy (fallback)
 
     for prefix in prefixes:
         try:
@@ -272,7 +280,8 @@ def build_program_bulletin(channel_name: str, kind: str,
                            out_dir: str = "outputs/program_bulletins") -> "Path | None":
     """NotebookLM-sourced program bulletin flow:
         Intro -> Namaste(welcome anchor) -> Main file(kind) -> Thanks(ending anchor)
-    kind = 'local' | 'district' (notebooklm/{Channel}/{kind}/ se main file).
+    kind = 'local' | 'district' | 'state' (state = geo state-wide notebooklm,
+    har district channel me fan-out; channel ke apne intro+anchor ke saath).
     Intro abhi channel intro (Intro1) — Intro2/Intro3 aate hi swap. 1920x1080 bulletin quality.
     Returns assembled video Path, or None."""
     main = fetch_latest_program(channel_name, kind)
@@ -340,7 +349,8 @@ def build_notebooklm_bulletin(channel_name: str) -> "Path | None":
     return build_program_bulletin(channel_name, "local")
 
 
-_PROGRAM_KIND_TE = {"local": "స్థానిక వార్తలు", "district": "జిల్లా వార్తలు"}
+_PROGRAM_KIND_TE = {"local": "స్థానిక వార్తలు", "district": "జిల్లా వార్తలు",
+                    "state": "రాష్ట్ర వార్తలు"}
 
 
 def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None:
@@ -970,11 +980,14 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
                 debug(f"[{label}] ⚠️ Inject file invalid ({inject_payload.name}) — skipping")
 
     # ── NotebookLM program bulletins (cached build) — agar channel ke liye ho ──
-    nlm_local = nlm_district = None
+    # local + district = is district ke 2 channels; state = state-wide (har district
+    # ke dono channel me fan-out, channel ke apne intro+anchor ke saath).
+    nlm_local = nlm_district = nlm_state = None
     if channel_name:
         try:
             nlm_local    = build_program_bulletin(channel_name, "local")
             nlm_district = build_program_bulletin(channel_name, "district")
+            nlm_state    = build_program_bulletin(channel_name, "state")
             # /api/bulletins POST — notebooklm bulletin ko UI feed me bhejo (citizen
             # bulletins jaise). build_program_bulletin ka cache + .sent marker mil ke
             # ensure karte hain: POST sirf EK BAAR per NAYA notebooklm (har cycle nahi).
@@ -982,6 +995,7 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
             # me flag absent hone se accidental production POST nahi hota.
             if nlm_local:    _maybe_send_program_to_api(channel_name, "local",    nlm_local)
             if nlm_district: _maybe_send_program_to_api(channel_name, "district", nlm_district)
+            if nlm_state:    _maybe_send_program_to_api(channel_name, "state",    nlm_state)
         except Exception as e:
             debug(f"[{label}] program bulletin build error: {e}")
 
@@ -1004,6 +1018,15 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
             skipped += 1
     _nlm_l_ok = bool(nlm_local and _is_valid_mp4(nlm_local))
     _nlm_d_ok = bool(nlm_district and _is_valid_mp4(nlm_district))
+    _nlm_s_ok = bool(nlm_state and _is_valid_mp4(nlm_state))
+
+    # ── State-wide notebooklm — har district channel (local+district) me ek baar ──
+    # per cycle, news flow se PEHLE. lines*10 repeat se poore playlist me evenly
+    # spaced rehta hai (local/district ki tarah har news ke baad nahi — ye state-wide
+    # content hai, isliye sparse). Branch chahe koi bhi ho, ye hamesha play hota hai.
+    if _nlm_s_ok:
+        lines.append(f"file \'{str(nlm_state)}\'")
+        debug(f"[{label}] + STATE notebooklm woven (state-wide fan-out)")
 
     if _cls_ok:
         # ── CLASSIFIED flow (flag ON + content) — user ka exact flow: ──

@@ -674,6 +674,16 @@ def geo_district_prefix(channel_name):
     dist = str(channel_name).strip().lower().replace(' ', '_').replace('-', '_')
     return f"geo/states/{st}/districts/{dist}"
 
+def geo_state_prefix(channel_name):
+    """geo/ prefix for a channel's STATE-wide folder (MAIN bucket), or None if
+    the channel's state is unknown. State notebooklm yahan se har district ke
+    local+district channel me fan-out hota hai. e.g. Kurnool ->
+    'geo/states/andhra_pradesh/_state'."""
+    st = channel_state(channel_name)
+    if not st:
+        return None
+    return f"geo/states/{st}/_state"
+
 
 # ── News-bulletin routing: DETERMINISTIC location -> channel ────────────────
 # Backend location_id is authoritative; location_name is a fallback. UNKNOWN -> None
