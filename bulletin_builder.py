@@ -1322,21 +1322,20 @@ CLIP_MIN_DUR = 5.0
 ITEM_MAX_DUR = 45.0   # individual news item (intro+clip+analysis) ka MAX duration
 
 def _clip_half(window, narration_dur):
-    """clip = narration (intro+analysis) → 50/50 news content.
-    HARD RULE: audio (intro+analysis) kabhi trim/cut nahi hota — poora & meaningful
-    chalta hai. Item (intro+clip+analysis) ITEM_MAX_DUR (45s) pe capped: narration
-    lambi ho to CLIP shrink/drop karke item 45s pe rakhte hain (audio nahi chhedte).
-      - room = 45 - narration  → clip ke liye bachi jagah
-      - room ≤ 0 (narration hi 45s+ ki): clip = 0 (drop; audio intact)
-      - warna clip = min(narration[50%], room, editorial-window); CLIP_MIN_DUR floor
-        sirf tab lagta hai jab room itni jagah de (floor kabhi cap cross nahi karta)."""
+    """Real clip ko item me ADD karo — total (intro+clip+analysis) ≤ ITEM_MAX_DUR (45s).
+    Budget: pehle narration (intro+analysis, kabhi trim nahi) — bachi room me clip:
+      room = 45 − narration       → clip ke liye jagah (total 45 cap)
+      clip = min(room, window)    → room fill kare, par actual video clip se lamba nahi
+    Jab tak room > 0 aur video clip hai, clip HAMESHA present rehta hai. Order editorial
+    planner decide karta (intro+clip+analysis / intro+analysis+clip / clip+intro+analysis).
+    room ≤ 0 (narration khud 45s+) → clip 0 (45 cap nahi todte; audio intact — narration
+    ab ~22s target hoti hai isliye ye normally hota nahi)."""
     narr = float(narration_dur)
+    win  = float(window)
     room = ITEM_MAX_DUR - narr
-    if room <= 0:
+    if win <= 0 or room <= 0:
         return 0.0
-    target = min(narr, room, float(window))       # 50% rule, 45s-cap + window se bounded
-    floor  = min(CLIP_MIN_DUR, room)              # floor room se zyada nahi
-    return max(floor, max(0.0, target))
+    return min(room, win)            # room fill, video length se bounded → total ≤ 45s
 
 # def load_metadata() -> List[Dict]:
 #     if not os.path.exists(METADATA_FILE):

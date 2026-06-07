@@ -1874,8 +1874,53 @@ def build_image_slideshow(image_paths: List[str], audio_path: str,
     finally:
         import shutil as _sh
         _sh.rmtree(tmp_dir, ignore_errors=True)
- 
- 
+
+
+def _build_clip_clean(media_file: str, clip_start: float, clip_use_end: float,
+                      logo_path: str, out_path: str) -> bool:
+    """Extract a REAL video clip with its ORIGINAL audio (NO TTS / anchor voice),
+    scaled to frame + logo overlay. Used for the clean clip in single-video and
+    image+video (mixed) items — the clip plays with its own sound, anchor chup."""
+    _has_logo   = bool(logo_path and os.path.exists(logo_path))
+    _logo_video = _logo_is_animated(logo_path)
+    if _has_logo:
+        _logo_inputs = _logo_input_args(logo_path, clip_use_end - clip_start)
+        _logo_scale  = (f'[1:v]scale=500:-1,fps={FPS},format=yuva420p[logo];'
+                        if _logo_video else f'[1:v]scale=500:-1,format=yuva420p[logo];')
+        _clip_trim   = f'trim={clip_start}:{clip_use_end},setpts=PTS-STARTPTS'
+        if _needs_blur_fill(media_file):
+            _fc = (f'[0:v]{_clip_trim}[ct];'
+                   + _blur_fill_filter('[ct]', '[base]') + ';'
+                   + _logo_scale +
+                   '[base][logo]overlay=x=W-overlay_w-10:y=10,format=yuv420p[outv]')
+        else:
+            _fc = (f'[0:v]{_clip_trim},scale={WIDTH}:{HEIGHT},fps={FPS},format=yuv420p[base];'
+                   + _logo_scale +
+                   '[base][logo]overlay=x=W-overlay_w-10:y=10,format=yuv420p[outv]')
+        return _run([
+            'ffmpeg', '-y', '-i', media_file, *_logo_inputs,
+            '-filter_complex', _fc, '-map', '[outv]', '-map', '0:a',
+            '-af', f'atrim={clip_start}:{clip_use_end},asetpts=PTS-STARTPTS',
+            '-c:v', VIDEO_CODEC, '-b:v', VIDEO_BITRATE, '-maxrate', MAXRATE, '-bufsize', BUFSIZE,
+            '-g', GOP_SIZE, '-keyint_min', GOP_SIZE, '-sc_threshold', '0', '-preset', PRESET,
+            '-c:a', AUDIO_CODEC, '-b:a', AUDIO_BITRATE, '-ar', '44100', '-ac', '2',
+            '-video_track_timescale', '12800', out_path
+        ], f'Clean clip + logo [{clip_start:.1f}s→{clip_use_end:.1f}s]')
+    return _run([
+        'ffmpeg', '-y', '-ss', str(clip_start), '-to', str(clip_use_end), '-i', media_file,
+        *(
+            ['-filter_complex', _blur_fill_filter('[0:v]', '[outv]'), '-map', '[outv]', '-map', '0:a']
+            if _needs_blur_fill(media_file)
+            else ['-vf', f'scale={WIDTH}:{HEIGHT},fps={FPS},format=yuv420p,setpts=PTS-STARTPTS']
+        ),
+        '-af', 'asetpts=PTS-STARTPTS',
+        '-c:v', VIDEO_CODEC, '-b:v', VIDEO_BITRATE, '-maxrate', MAXRATE, '-bufsize', BUFSIZE,
+        '-g', GOP_SIZE, '-keyint_min', GOP_SIZE, '-sc_threshold', '0', '-preset', PRESET,
+        '-c:a', AUDIO_CODEC, '-b:a', AUDIO_BITRATE, '-ar', '44100', '-ac', '2',
+        '-video_track_timescale', '12800', out_path
+    ], f'Clean clip [{clip_start:.1f}s→{clip_use_end:.1f}s]')
+
+
 def build_multi_media_news_segment(
     intro_audio_path: str,
     analysis_audio_path: str,
@@ -1912,9 +1957,9 @@ def build_multi_media_news_segment(
     CLIP_DEFAULT = clip_end - clip_start   # use full editorial window
  
     # HARD CAP: item (intro+clip+analysis) ≤ ITEM_MAX_DUR. Audio (intro/analysis)
-    # kabhi trim nahi — clip shrink/drop hoke 59s cap absorb karta hai. (Clip <3s
+    # kabhi trim nahi — clip shrink/drop hoke 45s cap absorb karta hai. (Clip <3s
     # ho to neeche [B] block khud drop kar deta hai → intro+analysis only, audio intact.)
-    ITEM_MAX_DUR = 59.0
+    ITEM_MAX_DUR = 45.0
     room = max(0.0, ITEM_MAX_DUR - intro_tts_dur - analysis_tts_dur)  # clip ke liye bachi jagah
 
     if allocated_duration and allocated_duration > 0:
@@ -2416,11 +2461,19 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
                     if ok and os.path.exists(intro_seg):
                         built.append(intro_seg)
  
-                # [B] Video with original audio
+                # [B] Real video clip — CLEAN (original audio, NO anchor TTS).
+                # Sized so intro(images+TTS) + clip + analysis(images+TTS) ≤ 45s.
                 if vpath_mixed and os.path.exists(vpath_mixed):
                     vid_seg = os.path.join(segments_dir, f'{str(seg_idx).zfill(3)}_mix_vid_{rank:02d}.mp4')
                     seg_idx += 1
-                    ok = build_news_segment(vpath_mixed, sa_p, logo_path, vid_seg, reporter_info=None)
+                    _intro_d = _audio_duration(intro_ap) if (intro_ap and os.path.exists(intro_ap)) else 0.0
+                    _ana_d   = _audio_duration(analysis_ap) if (analysis_ap and os.path.exists(analysis_ap)) else 0.0
+                    _room    = max(0.0, 45.0 - _intro_d - _ana_d)          # clip ke liye jagah (≤45)
+                    _cs      = float(clip_start) if clip_start is not None else 0.0
+                    _avail   = max(0.0, _video_duration(vpath_mixed) - _cs)
+                    _win     = (float(clip_end) - float(clip_start)) if (clip_start is not None and clip_end is not None) else _avail
+                    _clip_d  = max(0.0, min(_room, _avail, _win))
+                    ok = _build_clip_clean(vpath_mixed, _cs, _cs + _clip_d, logo_path, vid_seg) if _clip_d >= 1.5 else False
                     if ok and os.path.exists(vid_seg):
                         built.append(vid_seg)
  
@@ -2469,8 +2522,8 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
             analysis_tts_dur = _audio_duration(analysis_ap) if analysis_ap else 0.0
  
             # HARD CAP: item (intro+clip+analysis) ≤ ITEM_MAX_DUR. Audio (intro/analysis)
-            # kabhi trim nahi — clip shrink/drop hoke 59s cap absorb karta hai.
-            ITEM_MAX_DUR = 59.0
+            # kabhi trim nahi — clip shrink/drop hoke 45s cap absorb karta hai.
+            ITEM_MAX_DUR = 45.0
             room = max(0.0, ITEM_MAX_DUR - intro_tts_dur - analysis_tts_dur)  # clip ke liye bachi jagah
 
             if alloc > 0:
