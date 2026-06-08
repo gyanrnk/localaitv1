@@ -707,8 +707,9 @@ class NewsBot:
         # ── Target words ──────────────────────────────────────────────────────
         from config import WORDS_PER_SECOND_TELUGU
         if media_type == 'video':
-            # 59s total − 20s max clip = 39s for TTS narration
-            target_words = round(39 * WORDS_PER_SECOND_TELUGU)   # ~86 words
+            # 45s total = ~22s narration + ~22s real clip. Narration ko itna rakho ki
+            # clip (room = 45 − narration) ke liye jagah bache — _clip_half add karta hai.
+            target_words = round(22 * WORDS_PER_SECOND_TELUGU)   # ~48 words (~22s)
         else:
             _per_item_sec = (300 - 20) / 5
             target_words  = max(30, int(_per_item_sec * WORDS_PER_SECOND_TELUGU))

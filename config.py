@@ -383,30 +383,32 @@ OUTPUT: Only the 2-line Telugu headline. Nothing else."""
 # ================================
 WORDS_PER_SECOND_TTS = 2.2
 EDITORIAL_PLANNER_PROMPT = f"""
-You are a professional Telugu broadcast news editor. 
-Produce a news story that fits inside 59 seconds total (TTS narration + video clip combined).
+You are a professional Telugu broadcast news editor.
+Produce a news story that fits inside 45 seconds total (TTS narration + video clip combined).
+50/50 RULE: narration (tts_intro + tts_analysis) ≈ 22s = half the item; video clip ≈ 22s = other half.
+Keep narration tight, complete and meaningful — full sentences only, never cut mid-thought.
 
 ════════════════════════════════════════════
-TIMING BUDGET  (must not exceed 59 seconds)
+TIMING BUDGET  (must not exceed 45 seconds)
 ════════════════════════════════════════════
-  Hook        :  ~5s   → {round(5  * WORDS_PER_SECOND_TTS)} Telugu words  (tts_intro opening)
-  Context     : ~10s   → {round(10 * WORDS_PER_SECOND_TTS)} Telugu words  (tts_intro continuation)
-  ── tts_intro total: ~15s / {round(15 * WORDS_PER_SECOND_TTS)} words ──
-  Video clip  : 8–20s  (extracted from input video — most relevant segment only)
-  Analysis    : ~12s   → {round(12 * WORDS_PER_SECOND_TTS)} Telugu words  (tts_analysis opening)
+  Hook        :  ~4s   → {round(4  * WORDS_PER_SECOND_TTS)} Telugu words  (tts_intro opening)
+  Context     :  ~6s   → {round(6  * WORDS_PER_SECOND_TTS)} Telugu words  (tts_intro continuation)
+  ── tts_intro total: ~10s / {round(10 * WORDS_PER_SECOND_TTS)} words ──
+  Video clip  : 8–23s  (extracted from input video — most relevant segment only; ~22s = 50% half)
+  Analysis    :  ~8s   → {round(8  * WORDS_PER_SECOND_TTS)} Telugu words  (tts_analysis opening)
   Closing     :  ~4s   → {round(4  * WORDS_PER_SECOND_TTS)} Telugu words  (tts_analysis closing line)
-  ── tts_analysis total: ~16s / {round(16 * WORDS_PER_SECOND_TTS)} words ──
+  ── tts_analysis total: ~12s / {round(12 * WORDS_PER_SECOND_TTS)} words ──
 
-  MAX clip duration  : 20 seconds
+  MAX clip duration  : 23 seconds
   MIN clip duration  :  8 seconds
-  MAX tts_intro      : {round(15 * WORDS_PER_SECOND_TTS)} words
-  MAX tts_analysis   : {round(16 * WORDS_PER_SECOND_TTS)} words
-  HARD TOTAL CEILING : 59 seconds
+  MAX tts_intro      : {round(10 * WORDS_PER_SECOND_TTS)} words
+  MAX tts_analysis   : {round(12 * WORDS_PER_SECOND_TTS)} words
+  HARD TOTAL CEILING : 45 seconds
 
 ════════════════════════════════════════════
 CLIP SELECTION
 ════════════════════════════════════════════
-- Pick the single most visually/emotionally relevant 8–20s segment
+- Pick the single most visually/emotionally relevant 8–23s segment
 - Do NOT use the full video
 - Prefer segments with: strong speech, key action, or emotional peak
 - clip.start and clip.end must be floats from the actual transcript timestamps
@@ -426,13 +428,13 @@ WRITING RULES
     • Hook sentence: the single most important fact (who/what/where)
     • Context: brief background so viewer understands the clip
     • End with a smooth lead-in line into what comes next
-    • STRICT MAX: {round(15 * WORDS_PER_SECOND_TTS)} Telugu words
+    • STRICT MAX: {round(10 * WORDS_PER_SECOND_TTS)} Telugu words
 
   tts_analysis must contain:
     • Why this matters / impact
     • What happens next OR key takeaway
     • Final closing line (e.g. "ఈ విషయంలో మరిన్ని వివరాలు రానున్నాయి.")
-    • STRICT MAX: {round(16 * WORDS_PER_SECOND_TTS)} Telugu words
+    • STRICT MAX: {round(12 * WORDS_PER_SECOND_TTS)} Telugu words
   
   NEVER reference the video or clip in narration.
   ❌ No "ఈ వీడియోలో", "ఈ క్లిప్‌లో", "video lo", "clip lo", or any variant.
@@ -605,6 +607,142 @@ def get_loc_id_from_address(address: str) -> int:
     hash_id = int(_hashlib.md5(addr_lower.encode()).hexdigest()[:5], 16) + 10000
     return hash_id
 
+
+# ── Classified-form location bulletins (EXT bucket) ─────────────────────────
+# EXT bucket stores classified videos as {form}/outputs/{backend_id}/...
+# These BACKEND ids are a SEPARATE id-space from LOCATION_MAP (1..41) — resolved
+# ONCE via GET /api/locations/{id}, baked here. Runtime NEVER calls the API.
+# NOTE: backend 75/141/... are unrelated to LOCATION_MAP's 1..41 — keep separate.
+CLASSIFIED_LOCATION_MAP = {
+    # "<backend_id>": {"channel": "<stream channel key>", "telugu": "<name>"}
+    "75":  {"channel": "karimnagar", "telugu": "కరీంనగర్"},
+    "141": {"channel": "nalgonda",   "telugu": "నల్గొండ"},
+    "154": {"channel": "warangal",   "telugu": "వరంగల్"},
+    "161": {"channel": "khammam",    "telugu": "ఖమ్మం"},     # content hai, par stream channel nahi (abhi skip)
+    "285": {"channel": "nellore",    "telugu": "నెల్లూరు"},
+    "305": {"channel": "kurnool",    "telugu": "కర్నూలు"},
+    "344": {"channel": "guntur",     "telugu": "గుంటూరు"},
+}
+
+# Reverse: stream channel (lowercased) -> [backend location ids] feeding it.
+CHANNEL_LOCATION_IDS = {}
+for _bid, _v in CLASSIFIED_LOCATION_MAP.items():
+    CHANNEL_LOCATION_IDS.setdefault(_v["channel"], []).append(_bid)
+# CHANNEL_DEFS me Nellore(285) ka stream channel naam "Nalore" hai → alias.
+if "nellore" in CHANNEL_LOCATION_IDS:
+    CHANNEL_LOCATION_IDS.setdefault("nalore", CHANNEL_LOCATION_IDS["nellore"])
+
+_CLASSIFIED_FALLBACK = ("unknown", "స్థానిక వార్తలు")
+
+def get_classified_location(loc_id):
+    """backend location_id (int|str) -> (channel_key, telugu_name). Safe fallback,
+    never raises (unknown / 'all' / 'None' / '' -> generic)."""
+    key = str(loc_id).strip()
+    if not key or key.lower() in ("all", "none"):
+        return _CLASSIFIED_FALLBACK
+    e = CLASSIFIED_LOCATION_MAP.get(key)
+    if not e:
+        return _CLASSIFIED_FALLBACK
+    return (e.get("channel") or _CLASSIFIED_FALLBACK[0],
+            e.get("telugu")  or _CLASSIFIED_FALLBACK[1])
+
+def channel_backend_ids(channel_name):
+    """stream channel name -> [backend location ids] (empty list if none)."""
+    return CHANNEL_LOCATION_IDS.get(str(channel_name).strip().lower(), [])
+
+
+# ── Channel → State (for geo/ S3 structure) ─────────────────────────────────
+CHANNEL_STATE = {
+    "kurnool": "andhra_pradesh", "guntur": "andhra_pradesh", "kakinada": "andhra_pradesh",
+    "nalore": "andhra_pradesh", "nellore": "andhra_pradesh", "tirupati": "andhra_pradesh",
+    "anatpur": "andhra_pradesh", "anantapur": "andhra_pradesh",
+    "khammam": "telangana", "karimnagar": "telangana", "warangal": "telangana",
+    "nalgonda": "telangana",
+}
+
+def channel_state(channel_name):
+    """stream channel -> state key (for geo/ paths), or None."""
+    return CHANNEL_STATE.get(str(channel_name).strip().lower())
+
+def geo_district_prefix(channel_name):
+    """geo/ prefix for a channel's district folder (MAIN bucket), or None if
+    the channel's state is unknown. e.g. Kurnool ->
+    'geo/states/andhra_pradesh/districts/kurnool'."""
+    st = channel_state(channel_name)
+    if not st:
+        return None
+    dist = str(channel_name).strip().lower().replace(' ', '_').replace('-', '_')
+    return f"geo/states/{st}/districts/{dist}"
+
+def geo_state_prefix(channel_name):
+    """geo/ prefix for a channel's STATE-wide folder (MAIN bucket), or None if
+    the channel's state is unknown. State notebooklm yahan se har district ke
+    local+district channel me fan-out hota hai. e.g. Kurnool ->
+    'geo/states/andhra_pradesh/_state'."""
+    st = channel_state(channel_name)
+    if not st:
+        return None
+    return f"geo/states/{st}/_state"
+
+
+# ── News-bulletin routing: DETERMINISTIC location -> channel ────────────────
+# Backend location_id is authoritative; location_name is a fallback. UNKNOWN -> None
+# (skip — NEVER default to Kurnool; the old LLM classify_location_to_channel defaulted
+# everything to Kurnool on Gemini failure, starving all other channels). Anatpur is
+# intentionally NOT mapped (skip — no content).
+LOCATION_ID_TO_CHANNEL = {
+    "75":  "Karimnagar", "141": "Nalgonda", "154": "Warangal", "161": "Khammam",
+    "209": "Kakinada",   "285": "Nalore",   "305": "Kurnool",  "335": "Tirupati",
+    "344": "Guntur",
+}
+_NEWS_CHANNELS = ["Khammam", "Kurnool", "Karimnagar", "Anatpur", "Kakinada",
+                  "Nalore", "Tirupati", "Guntur", "Warangal", "Nalgonda"]
+
+def resolve_news_channel(location_id, location_name=''):
+    """Deterministic location -> channel for news bulletins.
+    1) backend location_id (authoritative), 2) location_name substring match,
+    3) None (unknown -> SKIP, never Kurnool-default)."""
+    ch = LOCATION_ID_TO_CHANNEL.get(str(location_id).strip())
+    if ch:
+        return ch
+    nl = str(location_name or '').strip().lower()
+    if nl:
+        for c in _NEWS_CHANNELS:
+            if c.lower() in nl:
+                return c
+    return None
+
+
+# ── NotebookLM upload: geo/ S3 key by scope (admin upload API) ──────────────
+_GEO_STATES    = ("andhra_pradesh", "telangana")
+_GEO_DISTRICTS = {
+    "andhra_pradesh": {"kurnool", "guntur", "kakinada", "nalore", "tirupati", "anatpur"},
+    "telangana":      {"khammam", "karimnagar", "warangal", "nalgonda"},
+}
+
+def notebooklm_geo_key(scope, state='', district='', kind='', filename='notebooklm.mp4'):
+    """Compute the geo/ S3 key for a notebooklm upload by scope.
+      national : geo/national/notebooklm/<file>
+      state    : geo/states/<state>/_state/notebooklm/<file>
+      district : geo/states/<state>/districts/<district>/<local|district>/notebooklm/<file>
+    Returns None if the scope's required fields are missing/invalid."""
+    scope = (scope or '').strip().lower()
+    fn    = (filename or '').strip() or 'notebooklm.mp4'
+    st    = (state or '').strip().lower()
+    d     = (district or '').strip().lower().replace(' ', '_').replace('-', '_')
+    k     = (kind or '').strip().lower()
+    if scope == 'national':
+        return f"geo/national/notebooklm/{fn}"
+    if scope == 'state':
+        if st not in _GEO_STATES:
+            return None
+        return f"geo/states/{st}/_state/notebooklm/{fn}"
+    if scope == 'district':
+        if st not in _GEO_STATES or d not in _GEO_DISTRICTS.get(st, set()) or k not in ('local', 'district'):
+            return None
+        return f"geo/states/{st}/districts/{d}/{k}/notebooklm/{fn}"
+    return None
+
 # ── Ticker Overlay ────────────────────────────────────────────────────────────
 # ── Item Video Cache ─────────────────────────────────────────────────────────
 # Pre-built item videos stored here so next bulletin can reuse instantly.
@@ -708,6 +846,7 @@ _SYSTEM_FONT_SUBSTITUTES = {
 _S3_SYNC_FOLDERS = [
     'assets/anchors',       # welcome anchor pool (intro ke baad)
     'assets/anchors_end',   # ending anchor pool (news ke baad, filler se pehle)
+    'assets/ads',           # per-channel ad-ticker text: assets/ads/<channel>/*.txt
 ]
 
 
@@ -790,18 +929,22 @@ def ensure_assets():
                     key = obj['Key']
                     if key.endswith('/'):
                         continue  # skip the folder placeholder
-                    fname = os.path.basename(key)
-                    if not fname:
+                    # Preserve subfolder structure (rel path under the prefix) so
+                    # per-channel dirs like ads/kurnool/kurnool_ads.txt land as
+                    # assets/ads/kurnool/kurnool_ads.txt (NOT flattened).
+                    rel = key[len(prefix):]
+                    if not rel:
                         continue
-                    dst = os.path.join(local_dir, fname)
+                    dst = os.path.join(local_dir, *rel.split('/'))
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
                     # download if missing or size differs (self-heal)
                     if os.path.exists(dst) and os.path.getsize(dst) == int(obj.get('Size', -1)):
                         continue
                     try:
                         s3.download_file(S3_BUCKET_NAME, key, dst)
-                        print(f"[assets] ✅ Synced {folder}/{fname}")
+                        print(f"[assets] ✅ Synced {folder}/{rel}")
                     except Exception as e:
-                        print(f"[assets] ⚠️ Could not sync {folder}/{fname}: {e}")
+                        print(f"[assets] ⚠️ Could not sync {folder}/{rel}: {e}")
         except Exception as e:
             print(f"[assets] ⚠️ Folder sync failed for {folder}: {e}")
 # ─────────────────────────────────────────────────────────────────────────────

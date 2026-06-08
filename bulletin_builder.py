@@ -1319,28 +1319,27 @@ CLIP_MAX = 20  # legacy cap (kept for reference)
 # User: news content me clip 50% + narration(intro+analysis) 50%. Headline card
 # alag (montage) hai, isliye 50/50 sirf news-segment (intro+clip+analysis) ka.
 #   → clip = narration (intro+analysis)  ⇒ clip 50%, narration 50%
-# HARD CAP: individual news item (intro+clip+analysis) max 59s. Agar narration
-# lambi ho to clip reduce karke item 59s pe rakho. Editorial window + min-floor
+# HARD CAP: individual news item (intro+clip+analysis) max 45s. Agar narration
+# lambi ho to clip reduce karke item 45s pe rakho. Editorial window + min-floor
 # se bhi bounded.
 CLIP_MIN_DUR = 5.0
-ITEM_MAX_DUR = 59.0   # individual news item (intro+clip+analysis) ka MAX duration
+ITEM_MAX_DUR = 45.0   # individual news item (intro+clip+analysis) ka MAX duration
 
 def _clip_half(window, narration_dur):
-    """clip = narration (intro+analysis) → 50/50 news content.
-    HARD RULE: audio (intro+analysis) kabhi trim/cut nahi hota — poora & meaningful
-    chalta hai. Item (intro+clip+analysis) ITEM_MAX_DUR (59s) pe capped: narration
-    lambi ho to CLIP shrink/drop karke item 59s pe rakhte hain (audio nahi chhedte).
-      - room = 59 - narration  → clip ke liye bachi jagah
-      - room ≤ 0 (narration hi 59s+ ki): clip = 0 (drop; audio intact)
-      - warna clip = min(narration[50%], room, editorial-window); CLIP_MIN_DUR floor
-        sirf tab lagta hai jab room itni jagah de (floor kabhi cap cross nahi karta)."""
+    """Real clip ko item me ADD karo — total (intro+clip+analysis) ≤ ITEM_MAX_DUR (45s).
+    Budget: pehle narration (intro+analysis, kabhi trim nahi) — bachi room me clip:
+      room = 45 − narration       → clip ke liye jagah (total 45 cap)
+      clip = min(room, window)    → room fill kare, par actual video clip se lamba nahi
+    Jab tak room > 0 aur video clip hai, clip HAMESHA present rehta hai. Order editorial
+    planner decide karta (intro+clip+analysis / intro+analysis+clip / clip+intro+analysis).
+    room ≤ 0 (narration khud 45s+) → clip 0 (45 cap nahi todte; audio intact — narration
+    ab ~22s target hoti hai isliye ye normally hota nahi)."""
     narr = float(narration_dur)
+    win  = float(window)
     room = ITEM_MAX_DUR - narr
-    if room <= 0:
+    if win <= 0 or room <= 0:
         return 0.0
-    target = min(narr, room, float(window))       # 50% rule, 59s-cap + window se bounded
-    floor  = min(CLIP_MIN_DUR, room)              # floor room se zyada nahi
-    return max(floor, max(0.0, target))
+    return min(room, win)            # room fill, video length se bounded → total ≤ 45s
 
 # def load_metadata() -> List[Dict]:
 #     if not os.path.exists(METADATA_FILE):
@@ -1754,49 +1753,38 @@ def build_all_location_bulletins(duration_minutes: int) -> dict:
 
     # return results
 
-    # Collect unique raw location names
-    raw_location_names = list({
-        item.get('location_name', '')
-        for item in all_items
-        if item.get('location_name', '')
-    })
-
-    # OpenAI classify → one of 3 canonical channels
-    loc_to_channel = classify_location_to_channel(raw_location_names)
-    print(f"🗺️  Location mapping: {loc_to_channel}")
-
-    # Bucket items by channel
+    # ── DETERMINISTIC routing: location_id (then name) -> channel ─────────────
+    # NO LLM. UNKNOWN location -> SKIP (never default to Kurnool). Each channel uses
+    # ONLY its OWN items — no cross-location "general" fallback (that leaked other
+    # locations' content into a channel). Short channels backfill same-location OLD
+    # items inside build_bulletin.
+    from config import resolve_news_channel
     KNOWN_CHANNELS = {"Karimnagar", "Khammam", "Kurnool",
                       "Anatpur", "Kakinada", "Nalore", "Tirupati",
                       "Guntur", "Warangal", "Nalgonda"}
-    channel_items  = {ch: [] for ch in KNOWN_CHANNELS}
-    general_items  = []  # items that don't match any of the 7 channels
+    channel_items = {ch: [] for ch in KNOWN_CHANNELS}
+    unmatched     = []  # unknown location → NOT routed anywhere (no Kurnool-default)
 
     for item in all_items:
-        raw     = item.get('location_name', '')
-        channel = loc_to_channel.get(raw)
-        if channel and channel in KNOWN_CHANNELS:
+        channel = resolve_news_channel(item.get('location_id'), item.get('location_name', ''))
+        if channel in KNOWN_CHANNELS:
             channel_items[channel].append(item)
         else:
-            general_items.append(item)
+            unmatched.append(item)
 
-    if general_items:
-        print(f"🌐 {len(general_items)} general items (no location match)")
+    _mapping = {ch: len(its) for ch, its in channel_items.items() if its}
+    print(f"🗺️  Deterministic location mapping (items/channel): {_mapping}")
+    if unmatched:
+        print(f"⚠️ {len(unmatched)} items with UNKNOWN location — SKIPPED (not routed to any channel)")
 
     results = {}
     for channel_name, items in channel_items.items():
-        if items:
-            # Channel ke apne items hain — sirf wahi use karo
-            use_items = items
-            print(f"\n{'='*60}\n🏗️  Building bulletin for {channel_name} ({len(items)} own items)\n{'='*60}")
-        elif general_items:
-            # Apne items nahi hain — general items fallback ke roop me use karo
-            use_items = general_items
-            print(f"\n{'='*60}\n🏗️  Building bulletin for {channel_name} (no own items — using {len(general_items)} general items)\n{'='*60}")
-        else:
-            print(f"⚠️ No items for {channel_name}, skipping")
+        if not items:
+            print(f"⚠️ No own items for {channel_name} — skip (notebooklm/filler covers it)")
             continue
-        path = build_bulletin(duration_minutes, location_name=channel_name, _items_override=use_items)
+        # SAME-LOCATION only — channel ke apne items hi (no cross-location borrow)
+        print(f"\n{'='*60}\n🏗️  Building bulletin for {channel_name} ({len(items)} own items)\n{'='*60}")
+        path = build_bulletin(duration_minutes, location_name=channel_name, _items_override=items)
         if path:
             results[channel_name] = {'location_name': channel_name, 'path': path}
 
@@ -2139,7 +2127,7 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
             intro_dur_actual    = _audio_dur(intro_path_f)    if os.path.exists(intro_path_f)    else float(item.get('script_duration', 0.0)) * 0.5
             analysis_dur_actual = _audio_dur(analysis_path_f) if (analysis_path_f and os.path.exists(analysis_path_f)) else 0.0
 
-            # clip = narration (intro+analysis) → 50/50, item ≤ 59s
+            # clip = narration (intro+analysis) → 50/50, item ≤ 45s
             clip_dur = _clip_half(
                 float(item['clip_end']) - float(item['clip_start']),
                 intro_dur_actual + analysis_dur_actual,
@@ -2336,7 +2324,7 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
 
         actual_script_slot = script_dur / uniform_atempo if uniform_atempo > 0 else script_dur
 
-        # clip = narration (script) → 50/50, item ≤ 59s
+        # clip = narration (script) → 50/50, item ≤ 45s
         clip_dur     = _clip_half(float(item["clip_end"]) - float(item["clip_start"]),
                                   actual_script_slot) if has_clip else 0.0
 
@@ -2642,7 +2630,7 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
         if has_clip:
             actual_intro    = _audio_dur(os.path.join(scripts_dir, intro_dest_name))    if intro_dest_name    else 0.0
             actual_analysis = _audio_dur(os.path.join(scripts_dir, analysis_dest_name)) if analysis_dest_name else 0.0
-            # clip = narration (intro+analysis) → 50/50, item ≤ 59s
+            # clip = narration (intro+analysis) → 50/50, item ≤ 45s
             clip_dur_actual = _clip_half(
                 float(item['clip_end']) - float(item['clip_start']),
                 actual_intro + actual_analysis,

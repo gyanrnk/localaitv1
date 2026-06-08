@@ -187,7 +187,10 @@ app = Flask(__name__)
 @app.after_request
 def after_request(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Headers'] = 'Range, Content-Type'
+    # 'Authorization' zaroori hai: admin presign upload Bearer token bhejta hai —
+    # iske bina browser CORS preflight fail karta hai. (Range/Content-Type video streaming.)
+    response.headers['Access-Control-Allow-Headers'] = 'Range, Content-Type, Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, OPTIONS'
     response.headers['Access-Control-Expose-Headers'] = 'Content-Range, Accept-Ranges, Content-Length'
     response.headers['Accept-Ranges'] = 'bytes'
     if response.content_type.startswith('application/json'):
@@ -835,35 +838,27 @@ def _run_planner():
         from datetime import datetime, timedelta, timezone
         import db as _db
 
-        _db_headlines = []
+        # Per-LOCATION DB headlines (location-filtered supplement). Keyed by
+        # news_items.location_id (backend id) → each channel only picks ITS own
+        # location's headlines (no all-location pollution — Kurnool no longer shows
+        # other districts' / national news in its ticker).
+        _db_headlines_by_loc = {}   # str(location_id) -> [headlines]
         try:
             _all_meta = _db.fetchall(
-                "SELECT headline, timestamp FROM news_items "
+                "SELECT headline, location_id FROM news_items "
                 "WHERE timestamp::timestamptz >= NOW() - INTERVAL '24 hours' "
                 "ORDER BY counter ASC"
             )
-            _seen_db = set()
             for item in _all_meta:
                 h = (item.get('headline') or '').strip()
-                if h and h not in _seen_db:
-                    _seen_db.add(h)
-                    _db_headlines.append(h)
+                if not h:
+                    continue
+                lid = str(item.get('location_id') or '')
+                lst = _db_headlines_by_loc.setdefault(lid, [])
+                if h not in lst:
+                    lst.append(h)
         except Exception as _e:
             logger.warning(f"⚠️ [TICKER] DB fetch failed: {_e}")
-
-        # Fallback: if 24hr window empty, grab latest 50
-        if not _db_headlines:
-            try:
-                _seen_db2 = set()
-                for item in _db.fetchall(
-                    "SELECT headline FROM news_items ORDER BY counter DESC LIMIT 50"
-                ):
-                    h = (item.get('headline') or '').strip()
-                    if h and h not in _seen_db2:
-                        _seen_db2.add(h)
-                        _db_headlines.append(h)
-            except Exception:
-                pass
         # ─────────────────────────────────────────────────────────────────────
 
 
@@ -927,8 +922,14 @@ def _run_planner():
                 if h and h not in _loc_seen:
                     _loc_seen.add(h)
                     _loc_headlines.append(h)
-            # Supplement with DB headlines from all locations
-            for h in _db_headlines:
+            # Supplement with THIS channel's location-filtered DB headlines ONLY
+            # (channel -> backend location ids -> per-loc headlines). No all-location
+            # pollution: Kurnool ticker shows Kurnool news, not other districts'.
+            from config import channel_backend_ids
+            _ch_db = []
+            for _lid in channel_backend_ids(channel_name):
+                _ch_db += _db_headlines_by_loc.get(str(_lid), [])
+            for h in _ch_db:
                 if h not in _loc_seen:
                     _loc_seen.add(h)
                     _loc_headlines.append(h)
@@ -940,7 +941,7 @@ def _run_planner():
                 if (_it.get('type') == 'news') and (_it.get('headline') or '').strip()
             )
             logger.info(f"📰 [TICKER] {channel_name}: {len(_loc_headlines)} total headlines "
-                        f"({_bulletin_hl_count} from bulletin, {len(_db_headlines)} from DB)")
+                        f"({_bulletin_hl_count} from bulletin, {len(_ch_db)} from DB-loc)")
 
             _build_done = threading.Event()
             _build_result = {'video_path': None, 'error': None}
@@ -1838,6 +1839,56 @@ def cleanup_old_data_loop():
             logger.warning(f"⚠️ S3 bulletin prune failed: {e}")
 
         # ══════════════════════════════════════════════════════════════════════
+        # STEP 13 — geo processed-notebooklm prune (default 3 din retention)
+        # Processed notebooklm bulletins ab geo/.../notebooklm_processed/ me hain —
+        # STEP 12 ka 'bulletins/' prune inhe NAHI pakadta. Har (district,kind) ka
+        # NEWEST hamesha rakho (UI ke paas current rahe), baaki 3-din+ purane delete.
+        # Tunable: NOTEBOOKLM_PROCESSED_RETENTION_DAYS.
+        # ══════════════════════════════════════════════════════════════════════
+        try:
+            from config import USE_S3, S3_BUCKET_NAME
+            _nlm_days = int(os.getenv('NOTEBOOKLM_PROCESSED_RETENTION_DAYS', '3'))
+            if USE_S3 and S3_BUCKET_NAME and _nlm_days > 0:
+                import boto3
+                from datetime import timezone as _tz, timedelta as _td
+                _s3n = boto3.client(
+                    's3', region_name=os.getenv('AWS_REGION', 'ap-south-2'),
+                    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+                    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+                )
+                _cut = datetime.now(_tz.utc) - _td(days=_nlm_days)
+                _grp = {}   # (folder, kind) -> [obj, ...]
+                _pg = _s3n.get_paginator('list_objects_v2')
+                for _page in _pg.paginate(Bucket=S3_BUCKET_NAME, Prefix='geo/'):
+                    for _o in _page.get('Contents', []):
+                        _k = _o['Key']
+                        if '/notebooklm_processed/' not in _k:
+                            continue
+                        _fn = _k.rsplit('/', 1)[-1]
+                        if not (_fn.startswith('nlm_') and _fn.endswith('.mp4')):
+                            continue
+                        _parts = _fn.split('_')
+                        _kind  = _parts[1] if len(_parts) >= 3 else ''
+                        _folder = _k.rsplit('/', 1)[0]
+                        _grp.setdefault((_folder, _kind), []).append(_o)
+                _del = []
+                for _objs in _grp.values():
+                    _objs.sort(key=lambda x: x['LastModified'], reverse=True)
+                    for _o in _objs[1:]:            # newest per (district,kind) ALWAYS kept
+                        if _o['LastModified'] < _cut:
+                            _del.append({'Key': _o['Key']})
+                _ndel = 0
+                for _i in range(0, len(_del), 1000):
+                    _chunk = _del[_i:_i + 1000]
+                    _r = _s3n.delete_objects(Bucket=S3_BUCKET_NAME,
+                                             Delete={'Objects': _chunk, 'Quiet': True})
+                    _ndel += len(_chunk) - len(_r.get('Errors', []))
+                logger.info(f"🗑️ geo notebooklm_processed prune: deleted {_ndel} object(s) "
+                            f"older than {_nlm_days}d (newest-per-district/kind kept)")
+        except Exception as e:
+            logger.warning(f"⚠️ geo notebooklm_processed prune failed: {e}")
+
+        # ══════════════════════════════════════════════════════════════════════
         # DONE
         # ══════════════════════════════════════════════════════════════════════
         logger.info("✅ 24-hour cleanup complete")
@@ -2214,6 +2265,167 @@ def _process_batch_background(batch_items: list, batch_id: str):
 
     # Trigger bulletin build immediately after batch is done
     threading.Thread(target=_run_planner, daemon=True).start()
+
+
+# ── NotebookLM bulletins (geo/ S3) — admin upload + UI list ─────────────────
+def _check_admin_token() -> bool:
+    """Bearer token must match BULLETIN_API_TOKEN or LOCALAITV_API_TOKEN."""
+    auth = request.headers.get('Authorization', '')
+    tok  = auth[7:].strip() if auth.startswith('Bearer ') else ''
+    valid = {os.getenv('BULLETIN_API_TOKEN', ''), os.getenv('LOCALAITV_API_TOKEN', '')}
+    valid.discard('')
+    return bool(tok) and tok in valid
+
+
+@app.route('/api/notebooklm/presign', methods=['POST'])
+def notebooklm_presign():
+    """Admin uploads a NotebookLM bulletin. Returns a presigned S3 PUT URL for the
+    geo/ key derived from {scope, state?, district?, kind?, filename}. Frontend then
+    PUTs the .mp4 to uploadUrl with header Content-Type: video/mp4.
+    Body: { scope: national|state|district, state?, district?, kind?: local|district,
+            filename: 'notebooklm_2026-06-07.mp4' }. Auth: Bearer admin token."""
+    if not _check_admin_token():
+        return jsonify({'status': 'error', 'message': 'unauthorized'}), 401
+    data = request.get_json(silent=True) or {}
+    fname = (data.get('filename') or '').strip()
+    if not fname.lower().endswith('.mp4'):
+        return jsonify({'status': 'error', 'message': 'filename must end with .mp4'}), 400
+    from config import notebooklm_geo_key
+    key = notebooklm_geo_key(data.get('scope'), data.get('state', ''),
+                             data.get('district', ''), data.get('kind', ''), fname)
+    if not key:
+        return jsonify({'status': 'error',
+                        'message': 'invalid scope/state/district/kind for this scope'}), 400
+    try:
+        import s3_storage as _s3
+        url = _s3._get_client().generate_presigned_url(
+            'put_object',
+            Params={'Bucket': _s3._bucket(), 'Key': key, 'ContentType': 'video/mp4'},
+            ExpiresIn=3600,
+        )
+        logger.info(f"[notebooklm] presign → {key}")
+        return jsonify({'status': 'ok', 'uploadUrl': url, 'key': key,
+                        'contentType': 'video/mp4', 'expiresIn': 3600}), 200
+    except Exception as e:
+        logger.error(f"[notebooklm presign] {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/notebooklm', methods=['GET'])
+def notebooklm_list():
+    """List NotebookLM bulletins from the geo/ structure. Optional filters:
+    ?scope=national|state|district & state= & district= & kind=local|district.
+    Returns each item + a presigned GET url (1h) for playback."""
+    import s3_storage as _s3
+    cl, bkt = _s3._get_client(), _s3._bucket()
+    scope_f = (request.args.get('scope') or '').lower()
+    state_f = (request.args.get('state') or '').lower()
+    dist_f  = (request.args.get('district') or '').lower()
+    kind_f  = (request.args.get('kind') or '').lower()
+
+    STATES = {"andhra_pradesh": ["kurnool", "guntur", "kakinada", "nalore", "tirupati", "anatpur"],
+              "telangana":      ["khammam", "karimnagar", "warangal", "nalgonda"]}
+    cands = []  # (scope, state, district, kind, prefix)
+    if scope_f in ('', 'national'):
+        cands.append(('national', '', '', '', 'geo/national/notebooklm/'))
+    for st, dists in STATES.items():
+        if state_f and st != state_f:
+            continue
+        if scope_f in ('', 'state'):
+            cands.append(('state', st, '', '', f'geo/states/{st}/_state/notebooklm/'))
+        if scope_f in ('', 'district'):
+            for d in dists:
+                if dist_f and d != dist_f:
+                    continue
+                for k in ('local', 'district'):
+                    if kind_f and k != kind_f:
+                        continue
+                    cands.append(('district', st, d, k,
+                                  f'geo/states/{st}/districts/{d}/{k}/notebooklm/'))
+
+    items = []
+    for scope, st, d, k, prefix in cands:
+        try:
+            res = cl.list_objects_v2(Bucket=bkt, Prefix=prefix)
+            for o in res.get('Contents', []):
+                if not o['Key'].endswith('.mp4') or o['Size'] <= 0:
+                    continue
+                url = cl.generate_presigned_url(
+                    'get_object', Params={'Bucket': bkt, 'Key': o['Key']}, ExpiresIn=3600)
+                items.append({
+                    'scope': scope, 'state': st, 'district': d, 'kind': k,
+                    'filename': o['Key'].split('/')[-1], 'key': o['Key'],
+                    'url': url, 'size': o['Size'],
+                    'lastModified': o['LastModified'].isoformat(),
+                })
+        except Exception as e:
+            logger.warning(f"[notebooklm list] {prefix}: {e}")
+    items.sort(key=lambda x: x['lastModified'], reverse=True)
+    return jsonify({'status': 'ok', 'count': len(items), 'items': items}), 200
+
+
+@app.route('/api/notebooklm/bulletins', methods=['GET'])
+def notebooklm_processed_bulletins():
+    """List PROCESSED NotebookLM bulletins (intro + welcome anchor + NotebookLM +
+    closing anchor) — the assembled program the streamer auto-builds and uploads
+    LOCATION-WISE to geo/states/<state>/districts/<district>/notebooklm_processed/
+    nlm_<kind>_<ts>.mp4. (Different from GET /api/notebooklm, which lists the RAW
+    admin uploads with no intro/anchor.) Each item gets a presigned GET url (1h),
+    newest first — poll this to render in the UI.
+    Optional filters: ?channel= & ?location_id= & ?kind=local|district|state."""
+    import s3_storage as _s3
+    from config import LOCATION_ID_TO_CHANNEL, geo_district_prefix
+    cl, bkt = _s3._get_client(), _s3._bucket()
+    ch_f   = (request.args.get('channel') or '').strip().lower()
+    loc_f  = (request.args.get('location_id') or '').strip()
+    kind_f = (request.args.get('kind') or '').strip().lower()
+
+    # Authoritative channel → backend/API location_id (Kurnool=305, Tirupati=335, …) —
+    # the reverse of the news-routing map; matches citizen bulletins/incidents/reports
+    # so the UI maps each NotebookLM bulletin to the correct location.
+    _ch_to_loc = {v.lower(): int(k) for k, v in LOCATION_ID_TO_CHANNEL.items()}
+    # Streamer channels (Anatpur is fully skipped, so excluded)
+    CHANNELS = ['Khammam', 'Kurnool', 'Karimnagar', 'Kakinada', 'Nalore',
+                'Tirupati', 'Guntur', 'Warangal', 'Nalgonda']
+    items = []
+    for ch in CHANNELS:
+        if ch_f and ch.lower() != ch_f:
+            continue
+        loc_id = _ch_to_loc.get(ch.lower(), 0)
+        if loc_f and str(loc_id) != loc_f:
+            continue
+        # PRIMARY: geo/.../<district>/notebooklm_processed/  (new location-wise store)
+        # LEGACY: bulletins/<channel>/  (pre-migration files; still served until they
+        #         age out, so nothing disappears abruptly during the transition).
+        _gp = geo_district_prefix(ch)
+        prefixes = []
+        if _gp:
+            prefixes.append(f"{_gp}/notebooklm_processed/")
+        prefixes.append(f'bulletins/{ch}/')
+        for pfx in prefixes:
+            try:
+                res = cl.list_objects_v2(Bucket=bkt, Prefix=pfx)
+                for o in res.get('Contents', []):
+                    fn = o['Key'].split('/')[-1]
+                    # processed notebooklm files: nlm_<kind>_<timestamp>.mp4
+                    if not (fn.startswith('nlm_') and fn.endswith('.mp4')) or o['Size'] <= 0:
+                        continue
+                    parts = fn.split('_')
+                    kind = parts[1] if len(parts) >= 3 else ''
+                    if kind_f and kind != kind_f:
+                        continue
+                    url = cl.generate_presigned_url(
+                        'get_object', Params={'Bucket': bkt, 'Key': o['Key']}, ExpiresIn=3600)
+                    items.append({
+                        'channel': ch, 'location_id': int(loc_id) if loc_id else 0,
+                        'kind': kind, 'filename': fn, 'key': o['Key'],
+                        'url': url, 'size': o['Size'],
+                        'lastModified': o['LastModified'].isoformat(),
+                    })
+            except Exception as e:
+                logger.warning(f"[notebooklm bulletins] {ch} {pfx}: {e}")
+    items.sort(key=lambda x: x['lastModified'], reverse=True)
+    return jsonify({'status': 'ok', 'count': len(items), 'items': items}), 200
 
 
 @app.route('/api/webhooks/batch', methods=['POST'])

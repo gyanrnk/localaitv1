@@ -36,6 +36,8 @@ services:
       - VERTEX_PROJECT=${VERTEX_PROJECT:-localaitv}
       - VERTEX_LOCATION=${VERTEX_LOCATION:-us-central1}
       - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-/app/adc.json}
+      # Classified location bulletins (flag-gated, opt-in)
+      - LOCATION_BULLETINS_ENABLED=${LOCATION_BULLETINS_ENABLED:-false}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - OPENAI_HEADLINE_MODEL=${OPENAI_HEADLINE_MODEL:-gpt-4o-mini}
       - SARVAM_API_KEY=${SARVAM_API_KEY}
@@ -121,6 +123,11 @@ services:
       - LOCALAITV_API_URL=${LOCALAITV_API_URL}
       - LOCALAITV_API_TOKEN=${LOCALAITV_API_TOKEN}
       - BULLETIN_API_TOKEN=${BULLETIN_API_TOKEN}
+      # Opt-in gate: notebooklm bulletin ko /api/bulletins (UI feed) pe bhejna.
+      # true sirf prod me — local test me absent rehne se accidental POST nahi hota.
+      - PROGRAM_BULLETIN_API_ENABLED=${PROGRAM_BULLETIN_API_ENABLED:-true}
+      # Classified location bulletins (streamer reads this — gates the new flow)
+      - LOCATION_BULLETINS_ENABLED=${LOCATION_BULLETINS_ENABLED:-false}
       - YOUTUBE_STREAMING_ENABLED=${YOUTUBE_STREAMING_ENABLED:-true}
       - YT_STREAM_KEY=${YT_STREAM_KEY}
       - STREAM_COUNT=${STREAM_COUNT}

@@ -930,44 +930,77 @@ class GeminiHandler:
             return text
 
     def transcribe_audio(self, audio_path: str) -> dict:
-        print(f"[GEMINI] 🎙️  transcribe_audio | model={GEMINI_MODEL} | file={audio_path}")
-        import os, subprocess, tempfile
+        print(f"[GEMINI] 🎙️  transcribe_audio | model={GEMINI_MODEL} | vertex={GEMINI_USE_VERTEX} | file={audio_path}")
+        import os, subprocess, tempfile, time as _time
         from google import genai as google_genai
 
-        # Convert to mp3 if needed
-        _send_path = audio_path
-        _tmp_mp3   = None
-        ext = os.path.splitext(audio_path)[1].lower()
-        if ext in ('.webm', '.ogg', '.m4a', '.opus'):
-            try:
-                _tmp_mp3 = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
-                _tmp_mp3.close()
-                r = subprocess.run(
-                    ['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1',
-                     '-b:a', '64k', _tmp_mp3.name],
-                    capture_output=True, timeout=60
-                )
-                if r.returncode == 0:
-                    _send_path = _tmp_mp3.name
-            except Exception as _ce:
-                print(f"⚠️ webm→mp3 convert failed: {_ce}, sending original")
+        _prompt = ('Transcribe this audio verbatim in the original language. '
+                   'Return only the transcription text, nothing else.')
 
+        # Always downsample to a compact 16kHz mono mp3 — small payload (reliable
+        # for Vertex inline audio) and plenty for transcription quality.
+        _send_path = audio_path
+        _tmp_path  = None
         try:
-            client = google_genai.Client(api_key=GEMINI_API_KEY)
-            audio_file = client.files.upload(file=_send_path)
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=[
-                    'Transcribe this audio verbatim in the original language. Return only the transcription text, nothing else.',
-                    audio_file,
-                ],
+            _tf = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False); _tf.close()
+            _r = subprocess.run(
+                ['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1',
+                 '-b:a', '64k', _tf.name],
+                capture_output=True, timeout=120
             )
+            if _r.returncode == 0 and os.path.getsize(_tf.name) > 0:
+                _send_path = _tf.name
+                _tmp_path  = _tf.name
+            else:
+                try: os.unlink(_tf.name)
+                except Exception: pass
+        except Exception as _ce:
+            print(f"⚠️ audio→16k mp3 convert failed: {_ce}, sending original")
+
+        def _is_rate_err(e):
+            m = str(e).lower()
+            return ('429' in m or 'resource_exhausted' in m or 'resource exhausted' in m
+                    or 'rate limit' in m or 'quota' in m)
+
+        _uploaded = None
+        try:
+            # ── Provider: Vertex AI (postpay, working billing) vs AI Studio (prepay) ──
+            # Vertex uses NATIVE genai SDK with INLINE audio (no Files API, no AI-Studio
+            # prepay credits). This is the fix for "prepayment credits depleted" 429s.
+            if GEMINI_USE_VERTEX:
+                from google.genai import types as _gtypes
+                _client = google_genai.Client(vertexai=True, project=VERTEX_PROJECT,
+                                              location=VERTEX_LOCATION)
+                _model  = GEMINI_MODEL[len('google/'):] if GEMINI_MODEL.startswith('google/') else GEMINI_MODEL
+                with open(_send_path, 'rb') as _af:
+                    _abytes = _af.read()
+                _contents = [_prompt, _gtypes.Part.from_bytes(data=_abytes, mime_type='audio/mpeg')]
+            else:
+                _client   = google_genai.Client(api_key=GEMINI_API_KEY)
+                _uploaded = _client.files.upload(file=_send_path)   # AI Studio Files API
+                _model    = GEMINI_MODEL
+                _contents = [_prompt, _uploaded]
+
+            # Bounded exponential backoff for TRANSIENT rate limits only; non-rate
+            # errors re-raise into the outer except (returns empty → plain script).
+            _max_attempts = 4
+            response = None
+            for _attempt in range(_max_attempts):
+                try:
+                    response = _client.models.generate_content(model=_model, contents=_contents)
+                    break
+                except Exception as _ge:
+                    if _is_rate_err(_ge) and _attempt < _max_attempts - 1:
+                        _wait = 2 ** _attempt  # 1s, 2s, 4s
+                        print(f"⏳ Gemini transcription rate-limited (attempt {_attempt+1}/{_max_attempts}) — retrying in {_wait}s")
+                        _time.sleep(_wait)
+                        continue
+                    raise
             text = (response.text or '').strip()
 
-            try:
-                client.files.delete(name=audio_file.name)
-            except Exception:
-                pass
+            if _uploaded is not None:
+                try: _client.files.delete(name=_uploaded.name)
+                except Exception: pass
 
             # Estimate segments from words (Gemini doesn't provide timestamps)
             segments = []
@@ -984,9 +1017,9 @@ class GeminiHandler:
             print(f"❌ Gemini transcription error: {e}")
             return {'text': '', 'segments': []}
         finally:
-            if _tmp_mp3:
-                try: os.unlink(_tmp_mp3.name)
-                except: pass
+            if _tmp_path:
+                try: os.unlink(_tmp_path)
+                except Exception: pass
 
 
 def get_llm_handler(location_name: str = ''):

@@ -72,6 +72,16 @@ for _ch in CHANNEL_DEFS:
     _ch["watch_dir"] = _wdir(_ch["name"])
     _ch["stream_key"] = os.getenv(_ch["key_env"])
 
+# Channels jo PURA skip karne hain — stream/build/filler kuch nahi, chahe key set ho.
+# Anatpur ka koi real content nahi (no own news, no per-location assets) → fully skip.
+SKIP_CHANNELS = {"anatpur"}
+
+def _active_channels():
+    """Active streaming channels = first STREAM_COUNT, minus SKIP_CHANNELS.
+    Anatpur jaise channels yahan se nikal jaate hain (stream key set ho tab bhi)."""
+    return [c for c in CHANNEL_DEFS[:STREAM_COUNT]
+            if c["name"].lower() not in SKIP_CHANNELS]
+
 INJECT_MAX_SEC = 5 * 60  # 5 minutes
 
 # ── S3 Config ─────────────────────────────────────────────────────────────────
@@ -226,41 +236,62 @@ def _s3_client_main():
 
 
 def fetch_latest_program(channel_name: str, kind: str) -> "Path | None":
-    """MAIN bucket `notebooklm/{Channel}/{kind}/` se latest .mp4 download.
-    kind = 'local' | 'district' | ... (subfolder = bulletin type). None agar koi nahi."""
+    """Latest notebooklm .mp4 for a channel+kind, downloaded + cached locally.
+    Reads the NEW geo/ district path FIRST
+    (geo/states/{state}/districts/{channel}/{kind}/notebooklm/), then falls back to the
+    LEGACY notebooklm/{Channel}/{kind}/ path. 'Latest' = filename natural-sort, tie on
+    LastModified (dated names like notebooklm_2026-06-07.mp4 win; multiple files kept).
+    kind = 'local' | 'district' | 'state' ('state' reads geo/states/{state}/_state/
+    notebooklm/ — state-wide, fans out to every district channel). Returns Path or None."""
     if not S3_BUCKET_MAIN:
         debug("program: S3_BUCKET_NAME not set"); return None
-    prefix = f"notebooklm/{channel_name}/{kind}/"
-    try:
-        res  = _s3_client_main().list_objects_v2(Bucket=S3_BUCKET_MAIN, Prefix=prefix)
-        mp4s = [o for o in res.get("Contents", []) if o["Key"].endswith(".mp4") and o["Size"] > 0]
-        if not mp4s:
-            debug(f"[{channel_name}/{kind}] no file in {prefix}")
-            return None
-        latest   = max(mp4s, key=lambda o: o["LastModified"])
-        # cache name me channel+kind taaki same filename (notebooklm.mp4) alag kinds me na takraye
-        safe     = f"{channel_name.lower()}_{kind}_" + Path(latest["Key"]).name
-        local    = NOTEBOOKLM_CACHE_DIR.resolve() / safe
-        s3_mtime = latest["LastModified"].timestamp()
-        # Re-download if missing OR S3 version newer (fixed-name daily overwrite → stale cache se bacho)
-        fresh = (local.exists() and local.stat().st_size > 100_000
-                 and local.stat().st_mtime >= s3_mtime)
-        if not fresh:
-            _s3_client_main().download_file(S3_BUCKET_MAIN, latest["Key"], str(local))
-            debug(f"[{channel_name}/{kind}] downloaded (fresh): {local.name}")
-        else:
-            debug(f"[{channel_name}/{kind}] cache hit: {local.name}")
-        return local
-    except (BotoCoreError, ClientError) as e:
-        debug(f"[{channel_name}/{kind}] program fetch error: {e}")
-        return None
+
+    from config import geo_district_prefix, geo_state_prefix
+    prefixes = []
+    if kind == "state":
+        # State-wide notebooklm — geo/states/{state}/_state/notebooklm/ se har
+        # district ke local+district channel me fan-out (legacy path nahi hota).
+        sp = geo_state_prefix(channel_name)
+        if sp:
+            prefixes.append(f"{sp}/notebooklm/")
+    else:
+        gp = geo_district_prefix(channel_name)
+        if gp:
+            prefixes.append(f"{gp}/{kind}/notebooklm/")        # geo (new — primary)
+        prefixes.append(f"notebooklm/{channel_name}/{kind}/")  # legacy (fallback)
+
+    for prefix in prefixes:
+        try:
+            res  = _s3_client_main().list_objects_v2(Bucket=S3_BUCKET_MAIN, Prefix=prefix)
+            mp4s = [o for o in res.get("Contents", []) if o["Key"].endswith(".mp4") and o["Size"] > 0]
+            if not mp4s:
+                continue
+            latest   = max(mp4s, key=lambda o: (_natural_sort_key(o["Key"]), o["LastModified"]))
+            # cache name me channel+kind taaki same filename alag kinds me na takraye
+            safe     = f"{channel_name.lower()}_{kind}_" + Path(latest["Key"]).name
+            local    = NOTEBOOKLM_CACHE_DIR.resolve() / safe
+            s3_mtime = latest["LastModified"].timestamp()
+            fresh = (local.exists() and local.stat().st_size > 100_000
+                     and local.stat().st_mtime >= s3_mtime)
+            if not fresh:
+                _s3_client_main().download_file(S3_BUCKET_MAIN, latest["Key"], str(local))
+                debug(f"[{channel_name}/{kind}] downloaded (fresh): {local.name} [{prefix}]")
+            else:
+                debug(f"[{channel_name}/{kind}] cache hit: {local.name} [{prefix}]")
+            return local
+        except (BotoCoreError, ClientError) as e:
+            debug(f"[{channel_name}/{kind}] program fetch error [{prefix}]: {e}")
+            continue
+    debug(f"[{channel_name}/{kind}] no notebooklm in geo or legacy path")
+    return None
 
 
 def build_program_bulletin(channel_name: str, kind: str,
                            out_dir: str = "outputs/program_bulletins") -> "Path | None":
     """NotebookLM-sourced program bulletin flow:
         Intro -> Namaste(welcome anchor) -> Main file(kind) -> Thanks(ending anchor)
-    kind = 'local' | 'district' (notebooklm/{Channel}/{kind}/ se main file).
+    kind = 'local' | 'district' | 'state' (state = geo state-wide notebooklm,
+    har district channel me fan-out; channel ke apne intro+anchor ke saath).
     Intro abhi channel intro (Intro1) — Intro2/Intro3 aate hi swap. 1920x1080 bulletin quality.
     Returns assembled video Path, or None."""
     main = fetch_latest_program(channel_name, kind)
@@ -328,13 +359,19 @@ def build_notebooklm_bulletin(channel_name: str) -> "Path | None":
     return build_program_bulletin(channel_name, "local")
 
 
-_PROGRAM_KIND_TE = {"local": "స్థానిక వార్తలు", "district": "జిల్లా వార్తలు"}
+_PROGRAM_KIND_TE = {"local": "స్థానిక వార్తలు", "district": "జిల్లా వార్తలు",
+                    "state": "రాష్ట్ర వార్తలు"}
 
 
 def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None:
     """NotebookLM program bulletin ko /api/bulletins POST karo — once per build.
     Citizen bulletins jaise hi UI me dikhe. Marker (.sent) se duplicate-send avoid:
     sirf tab bhejo jab ye build pehle nahi bheja gaya (output source se naya)."""
+    # Explicit opt-in: sirf jab PROGRAM_BULLETIN_API_ENABLED=true ho (prod compose me).
+    # Local test (flag absent) is se PRODUCTION /api/bulletins pe accidental POST +
+    # S3 upload NAHI karega — kyunki local .env me real BULLETIN_API_TOKEN hota hai.
+    if os.getenv("PROGRAM_BULLETIN_API_ENABLED", "").lower() not in ("1", "true", "yes"):
+        return
     video_path = Path(video_path)
     if not video_path.exists():
         return
@@ -350,11 +387,16 @@ def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None
     try:
         import requests
         from datetime import datetime
-        from config import LOCATION_TELUGU_MAP, LOCATION_MAP
+        from config import LOCATION_TELUGU_MAP, LOCATION_MAP, geo_district_prefix
 
         # 1. S3 pe upload (video_url ke liye)
+        # PROCESSED notebooklm bulletin ab geo/ me LOCATION-WISE store hota hai
+        # (raw notebooklm/ ka sibling: .../<district>/notebooklm_processed/).
+        # Fallback: agar channel geo-map me nahi mila to legacy bulletins/<channel>/.
         ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
-        s3_key = f"bulletins/{channel_name}/nlm_{kind}_{ts}.mp4"
+        _gp    = geo_district_prefix(channel_name)
+        s3_key = (f"{_gp}/notebooklm_processed/nlm_{kind}_{ts}.mp4" if _gp
+                  else f"bulletins/{channel_name}/nlm_{kind}_{ts}.mp4")
         _s3_client_main().upload_file(str(video_path), S3_BUCKET_MAIN, s3_key)
         region    = os.getenv("AWS_REGION", "ap-south-2")
         video_url = f"https://{S3_BUCKET_MAIN}.s3.{region}.amazonaws.com/{s3_key}"
@@ -594,7 +636,8 @@ def fetch_latest_vege():
 
 
 def _natural_sort_key(key):
-    return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\\d+)", key)]
+    # FIX: tha r"(\\d+)" (double backslash) → digit pe split hi nahi karta tha.
+    return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", key)]
 
 
 def fetch_train_clips():
@@ -648,6 +691,202 @@ SEGMENT_FETCHERS = {
     "vege":     fetch_latest_vege,
     "marriage": fetch_todays_marriage,
 }
+
+
+# ── Classified-form LOCATION bulletins (EXT bucket) ─────────────────────────
+# Flag-gated (default OFF). Forms with per-location content (vege excluded — old
+# injection covers loc 4; whoiswho/trainroutes are flat/non-location).
+LOCATION_BULLETINS_ENABLED = os.getenv("LOCATION_BULLETINS_ENABLED", "").lower() in ("1", "true", "yes")
+CLASSIFIED_FORMS        = ["birthdays", "marriages", "jobpostings", "carsales", "localevents", "shopping"]
+CLASSIFIED_MAX_PER_FORM = 6      # latest N candidates per form (raised for 10-min supply)
+CLASSIFIED_MAX_CLIPS    = 40     # total DISTINCT candidate cap
+CLASSIFIED_CLIP_MAX_SEC = 60.0   # per-clip trim (intro/anchors NOT trimmed)
+CLASSIFIED_CLIP_MIN_SEC = 8.0    # near-empty clips drop kar do
+CLASSIFIED_TARGET_SEC   = 600.0  # Rule 11: 10-min target
+CLASSIFIED_MAX_SEGS     = 60     # Rule 12: same-channel filler-loop guard (no infinite)
+
+
+def _list_all_mp4(prefix):
+    """Paginated list of all non-empty .mp4 objects under prefix (EXT bucket)."""
+    out, token = [], None
+    while True:
+        kw = dict(Bucket=S3_BUCKET, Prefix=prefix)
+        if token:
+            kw["ContinuationToken"] = token
+        res = _s3_client().list_objects_v2(**kw)
+        for o in res.get("Contents", []):
+            if o["Key"].endswith(".mp4") and o["Size"] > 0:
+                out.append(o)
+        if res.get("IsTruncated"):
+            token = res.get("NextContinuationToken")
+        else:
+            break
+    return out
+
+
+def _download_classified(s3_key):
+    """Collision-safe RAW download (no 1080 GOP — assembler re-encodes to 720).
+    Cache name uses full key (slashes→_) so shopping '1_Store.mp4' across dates
+    /locations don't overwrite each other."""
+    safe  = s3_key.replace("/", "_")
+    local = INJECT_CACHE_DIR / safe
+    if local.exists() and local.stat().st_size > 50_000:
+        return local
+    try:
+        _s3_client().download_file(S3_BUCKET, s3_key, str(local))
+        return local if (local.exists() and local.stat().st_size > 50_000) else None
+    except (BotoCoreError, ClientError) as e:
+        debug(f"classified dl failed [{s3_key}]: {e}")
+        return None
+
+
+def _select_classified_keys(location_id):
+    """Selected S3 keys (latest-per-form) for a backend location_id, newest by
+    LastModified. DELETION-AWARE: live S3 list — backend ne expired/sold item delete
+    kiya to wo yahan aata hi nahi (flow me alag se filter ki zaroorat nahi)."""
+    picked = []
+    for form in CLASSIFIED_FORMS:
+        prefix = f"{form}/outputs/{location_id}/"
+        try:
+            objs = _list_all_mp4(prefix)
+        except (BotoCoreError, ClientError) as e:
+            debug(f"classified list err [{prefix}]: {e}")
+            continue
+        objs.sort(key=lambda o: o["LastModified"], reverse=True)
+        picked += [o["Key"] for o in objs[:CLASSIFIED_MAX_PER_FORM]]
+    return picked[:CLASSIFIED_MAX_CLIPS]
+
+
+def fetch_classified_clips(location_id):
+    """Download the latest classified clips for a backend location_id (same-channel)."""
+    clips = []
+    for k in _select_classified_keys(location_id):
+        p = _download_classified(k)
+        if p:
+            clips.append(p)
+    debug(f"classified[{location_id}]: {len(clips)} clips")
+    return clips
+
+
+def build_location_classified_bulletin(channel_name, out_dir="outputs/program_bulletins",
+                                       min_rebuild_interval=300):
+    """LOCATION classified bulletin: Intro -> Namaste -> [same-channel clips filled
+    to a ~10-min target] -> Thanks. 1280x720 baseline (stream -c copy concat compat).
+
+    Rule 11 (10-min): clip durations ffprobe se naape jaate hain; greedily
+    CLASSIFIED_TARGET_SEC tak fill. Rule 12 (same-channel filler): distinct clips
+    kam pade to SAME channel ke clips loop hote hain (kabhi dusra channel nahi).
+    Deletion-aware cache: .keys manifest se clip-set track — backend ne expired/sold
+    item S3 se delete kiya to agle rebuild (<= min_rebuild_interval=5min) me drop ho
+    jata, flow me alag filter ki zaroorat nahi. Returns Path | None."""
+    import hashlib
+    from config import channel_backend_ids
+    ids = channel_backend_ids(channel_name)
+    if not ids:
+        return None
+
+    key       = channel_name.lower().replace(' ', '_').replace('-', '_')
+    out_base  = Path(out_dir) / channel_name
+    out       = out_base / f"classified_bulletin_{key}.mp4"
+    keys_file = out.with_suffix(".keys")
+
+    # Throttle: recent output → cached fast (per-cycle S3 re-list avoid)
+    if (out.exists() and out.stat().st_size > 100_000
+            and (time.time() - out.stat().st_mtime) < min_rebuild_interval):
+        return out
+
+    # Current SAME-CHANNEL selection keys (live S3 → backend-deleted items gone)
+    keys = []
+    for bid in ids:
+        keys += _select_classified_keys(bid)
+    if not keys:
+        debug(f"[{channel_name}] no classified clips — skip location bulletin")
+        return None
+    keys_sig = hashlib.md5("\n".join(sorted(set(keys))).encode()).hexdigest()
+
+    # Deletion/addition-aware cache: clip-set same hai to re-encode mat karo
+    if (out.exists() and out.stat().st_size > 100_000 and keys_file.exists()
+            and keys_file.read_text(encoding="utf-8").strip() == keys_sig):
+        os.utime(out, None)   # touch → throttle reset (content unchanged)
+        debug(f"[{channel_name}] classified cache hit (clip-set unchanged)")
+        return out
+
+    out_base.mkdir(parents=True, exist_ok=True)
+
+    # Download same-channel clips
+    clips = [p for p in (_download_classified(k) for k in keys) if p]
+    clips = [c for c in clips if _is_valid_mp4(c)]
+    if not clips:
+        debug(f"[{channel_name}] no valid classified clips")
+        return None
+
+    intro = _get_intro_path(channel_name)
+    from config import get_anchor_pair
+    namaste, thanks = get_anchor_pair(str(_SCRIPT_DIR))
+
+    head, tail = [], []
+    if intro and Path(intro).exists():     head.append(Path(intro))
+    if namaste and Path(namaste).exists(): head.append(Path(namaste))
+    if thanks and Path(thanks).exists():   tail.append(Path(thanks))
+    overhead = sum(_get_video_duration(p) for p in head + tail)
+
+    # Measure each clip (effective dur capped at CLIP_MAX); near-empty drop
+    measured = []
+    for c in clips:
+        d = min(_get_video_duration(c), CLASSIFIED_CLIP_MAX_SEC)
+        if d >= CLASSIFIED_CLIP_MIN_SEC:
+            measured.append((c, d))
+    if not measured:
+        debug(f"[{channel_name}] all classified clips too short")
+        return None
+
+    # Rule 11: greedily add DISTINCT clips toward 10-min target
+    chosen, running = [], overhead
+    for c, d in measured:
+        if running >= CLASSIFIED_TARGET_SEC:
+            break
+        chosen.append(c); running += d
+    # Rule 12: still short → LOOP SAME-CHANNEL clips (never other channels)
+    looped = 0
+    if running < CLASSIFIED_TARGET_SEC:
+        i = 0
+        while running < CLASSIFIED_TARGET_SEC and len(chosen) < CLASSIFIED_MAX_SEGS:
+            c, d = measured[i % len(measured)]
+            chosen.append(c); running += d; i += 1; looped += 1
+
+    clip_set = set(str(c) for c in chosen)
+    segs = head + chosen + tail
+
+    vf = ("scale=1280:720:force_original_aspect_ratio=decrease,"
+          "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25,format=yuv420p")
+    inputs, fc = [], []
+    for i, s in enumerate(segs):
+        if str(s) in clip_set:
+            inputs += ["-t", str(CLASSIFIED_CLIP_MAX_SEC), "-i", str(s)]
+        else:
+            inputs += ["-i", str(s)]
+        fc.append(f"[{i}:v]{vf}[v{i}];")
+        fc.append(f"[{i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];")
+    concat_in = "".join(f"[v{i}][a{i}]" for i in range(len(segs)))
+    fc.append(f"{concat_in}concat=n={len(segs)}:v=1:a=1[vout][aout]")
+
+    cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", "".join(fc),
+           "-map", "[vout]", "-map", "[aout]",
+           "-c:v", "libx264", "-preset", "veryfast",
+           "-profile:v", "baseline", "-level", "4.0",
+           "-pix_fmt", "yuv420p", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+           "-r", "25", "-g", "50", "-keyint_min", "50", "-sc_threshold", "0", "-bf", "0",
+           "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
+           "-movflags", "+faststart", str(out)]
+    debug(f"[{channel_name}] Building classified: {len(chosen)} segs "
+          f"({len(measured)} distinct +{looped} looped) ~{running:.0f}s / {CLASSIFIED_TARGET_SEC:.0f}s")
+    r = subprocess.run(cmd, capture_output=True, timeout=1800)
+    if r.returncode == 0 and out.exists() and out.stat().st_size > 100_000:
+        keys_file.write_text(keys_sig, encoding="utf-8")
+        debug(f"[{channel_name}] classified bulletin ready: {out.name} ({out.stat().st_size//1024} KB)")
+        return out
+    debug(f"[{channel_name}] classified bulletin failed: {r.stderr.decode()[-400:]}")
+    return None
 
 
 # ── Schedule checker ──────────────────────────────────────────────────────────
@@ -756,39 +995,82 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
                 debug(f"[{label}] ⚠️ Inject file invalid ({inject_payload.name}) — skipping")
 
     # ── NotebookLM program bulletins (cached build) — agar channel ke liye ho ──
-    nlm_local = nlm_district = None
+    # local + district = is district ke 2 channels; state = state-wide (har district
+    # ke dono channel me fan-out, channel ke apne intro+anchor ke saath).
+    nlm_local = nlm_district = nlm_state = None
     if channel_name:
         try:
             nlm_local    = build_program_bulletin(channel_name, "local")
             nlm_district = build_program_bulletin(channel_name, "district")
-            # NOTE: /api/bulletins POST (UI me dikhana) ABHI HOLD pe hai — calls
-            # intentionally DISABLED. Warna build_concat_list chalte hi (local test
-            # ya stream) S3 pe nlm_*.mp4 upload + production POST trigger ho jata.
-            # Un-hold karte waqt _maybe_send_program_to_api(...) calls wapas add karo
-            # + streamer ko BULLETIN_API_TOKEN env do (docker-compose.prod.yml).
-            #   if nlm_local:    _maybe_send_program_to_api(channel_name, "local",    nlm_local)
-            #   if nlm_district: _maybe_send_program_to_api(channel_name, "district", nlm_district)
+            nlm_state    = build_program_bulletin(channel_name, "state")
+            # /api/bulletins POST — notebooklm bulletin ko UI feed me bhejo (citizen
+            # bulletins jaise). build_program_bulletin ka cache + .sent marker mil ke
+            # ensure karte hain: POST sirf EK BAAR per NAYA notebooklm (har cycle nahi).
+            # Gate: PROGRAM_BULLETIN_API_ENABLED=true (sirf prod compose) — local test
+            # me flag absent hone se accidental production POST nahi hota.
+            if nlm_local:    _maybe_send_program_to_api(channel_name, "local",    nlm_local)
+            if nlm_district: _maybe_send_program_to_api(channel_name, "district", nlm_district)
+            if nlm_state:    _maybe_send_program_to_api(channel_name, "state",    nlm_state)
         except Exception as e:
             debug(f"[{label}] program bulletin build error: {e}")
 
+    # ── Location-wise CLASSIFIED bulletin (EXT bucket, per-channel, flag-gated) ──
+    # UI/API send NAHI — sirf stream weave (vege/train ki jagah, har notebooklm ke baad).
+    classified = None
+    if channel_name and LOCATION_BULLETINS_ENABLED:
+        try:
+            classified = build_location_classified_bulletin(channel_name)
+        except Exception as e:
+            debug(f"[{label}] classified build error: {e}")
+    _cls_ok = bool(classified and _is_valid_mp4(classified))
+
     skipped = 0
-    if nlm_local or nlm_district:
-        # ── "Ek ke baad ek": har SINGLE news ke baad poora program block ──
-        #   news → notebooklm(local) → vege/train → notebooklm(district) → next news …
-        #   NEWS_PER_PROGRAM = 1  (literal "one-after-another", phir loop)
-        NEWS_PER_PROGRAM = 1
-        valid_news = []
-        for news in bulletins:
-            if _is_valid_mp4(news):
-                valid_news.append(news)
+    valid_news = []
+    for news in bulletins:
+        if _is_valid_mp4(news):
+            valid_news.append(news)
+        else:
+            skipped += 1
+    _nlm_l_ok = bool(nlm_local and _is_valid_mp4(nlm_local))
+    _nlm_d_ok = bool(nlm_district and _is_valid_mp4(nlm_district))
+    _nlm_s_ok = bool(nlm_state and _is_valid_mp4(nlm_state))
+
+    # ── State-wide notebooklm — har district channel (local+district) me ek baar ──
+    # per cycle, news flow se PEHLE. lines*10 repeat se poore playlist me evenly
+    # spaced rehta hai (local/district ki tarah har news ke baad nahi — ye state-wide
+    # content hai, isliye sparse). Branch chahe koi bhi ho, ye hamesha play hota hai.
+    if _nlm_s_ok:
+        lines.append(f"file \'{str(nlm_state)}\'")
+        debug(f"[{label}] + STATE notebooklm woven (state-wide fan-out)")
+
+    if _cls_ok:
+        # ── CLASSIFIED flow (flag ON + content) — user ka exact flow: ──
+        #   news → notebooklm(local)    → classified →
+        #   news → notebooklm(district) → classified → loop
+        # local/district 2 news me split; classified vege/train ki jagah.
+        def _append_after(idx):
+            if idx % 2 == 0:
+                if _nlm_l_ok:
+                    lines.append(f"file \'{str(nlm_local)}\'")
             else:
-                skipped += 1
+                if _nlm_d_ok:
+                    lines.append(f"file \'{str(nlm_district)}\'")
+            lines.append(f"file \'{str(classified)}\'")
 
-        _nlm_l_ok = bool(nlm_local and _is_valid_mp4(nlm_local))
-        _nlm_d_ok = bool(nlm_district and _is_valid_mp4(nlm_district))
+        if valid_news:
+            for idx, n in enumerate(valid_news):
+                lines.append(f"file \'{str(n)}\'")
+                _append_after(idx)
+        else:
+            _append_after(0)   # local-block
+            _append_after(1)   # district-block
+        debug(f"[{label}] + CLASSIFIED flow news={len(valid_news)} "
+              f"local={_nlm_l_ok} district={_nlm_d_ok} classified=True")
 
+    elif nlm_local or nlm_district:
+        # ── Existing notebooklm flow (UNCHANGED) — har news ke baad poora block: ──
+        #   news → notebooklm(local) → vege/train → notebooklm(district) → loop
         def _append_program_block():
-            # local → vege (warna train) → district
             if _nlm_l_ok:
                 lines.append(f"file \'{str(nlm_local)}\'")
             if vege_path:
@@ -798,25 +1080,20 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
                 t = train_clips[_train_rotation_idx % len(train_clips)]
                 _train_rotation_idx += 1
                 lines.append(f"file \'{str(t)}\'")
-            # edge (b): na vege na train → block bas local+district (ya jo ho) chalega
             if _nlm_d_ok:
                 lines.append(f"file \'{str(nlm_district)}\'")
 
         if valid_news:
-            # ek news → ek program block, saare news par cycle; bahar × repeat = loop
-            for i in range(0, len(valid_news), NEWS_PER_PROGRAM):
-                for n in valid_news[i:i + NEWS_PER_PROGRAM]:
-                    lines.append(f"file \'{str(n)}\'")
+            for n in valid_news:
+                lines.append(f"file \'{str(n)}\'")
                 _append_program_block()
         else:
-            # edge (c): zero valid news → sirf program block, taaki stream khaali na rahe
             _append_program_block()
-
-        if _nlm_l_ok or _nlm_d_ok:
-            debug(f"[{label}] + notebooklm SEQUENTIAL (1 news → program block) "
-                  f"news={len(valid_news)} local={_nlm_l_ok} district={_nlm_d_ok}")
+        debug(f"[{label}] + notebooklm SEQUENTIAL news={len(valid_news)} "
+              f"local={_nlm_l_ok} district={_nlm_d_ok}")
     else:
         # ── Default interleave (channels without notebooklm) — pehle jaisa ──
+        skipped = 0   # is path me apna count (upar valid_news ka pre-count double na ho)
         for i, news in enumerate(bulletins):
             if not _is_valid_mp4(news):
                 debug(f"[{label}] ⚠️ Corrupt bulletin skipped: {news.name}")
@@ -1006,6 +1283,37 @@ def _exit_reason(rc):
 
 MIN_BULLETINS = 5
 
+
+def _get_filler_path(channel_name, global_fallback=True):
+    """Per-location filler from geo/ (MAIN bucket), cached locally + cache-fresh.
+    geo/states/{state}/districts/{channel}/filler/filler.mp4 → mile to wahi.
+    global_fallback=True → na mile to global FILLER_FILE (assets/filler.mp4).
+    global_fallback=False → geo na mile to None (caller geo-only chahta hai, taaki
+    Kurnool-branded global filler galti se na chale). Returns Path | None."""
+    from config import geo_district_prefix
+    pref = geo_district_prefix(channel_name)
+    if pref and S3_BUCKET_MAIN:
+        key   = f"{pref}/filler/filler.mp4"
+        dist  = channel_name.lower().replace(' ', '_').replace('-', '_')
+        local = INJECT_CACHE_DIR / f"geo_filler_{dist}.mp4"
+        try:
+            head     = _s3_client_main().head_object(Bucket=S3_BUCKET_MAIN, Key=key)
+            s3_mtime = head["LastModified"].timestamp()
+            fresh    = (local.exists() and local.stat().st_size > 50_000
+                        and local.stat().st_mtime >= s3_mtime)
+            if not fresh:
+                _s3_client_main().download_file(S3_BUCKET_MAIN, key, str(local))
+                debug(f"[{channel_name}] geo filler (fresh): {local.name}")
+            if local.exists() and local.stat().st_size > 50_000:
+                return local
+        except (BotoCoreError, ClientError):
+            debug(f"[{channel_name}] no geo filler"
+                  + (" — global fallback" if global_fallback else ""))
+    if not global_fallback:
+        return None
+    return FILLER_FILE if FILLER_FILE.exists() else None
+
+
 def _with_fallback(folder, channel_name):
     primary = get_all_bulletins(folder)
     if len(primary) >= MIN_BULLETINS:
@@ -1019,8 +1327,20 @@ def _with_fallback(folder, channel_name):
                 seen.add(str(f)); merged.append(f)
         if merged:
             return merged
-    # No content at all — play pre-encoded combined filler (intro+notebooklm) in a loop.
-    # Combined file is a single seamless MP4, so no concat-switching issues.
+    # No content at all — per-location GEO filler PEHLE (confirmed correct per-channel:
+    # "You Are Watching <Channel> TV"). Ye assets/intro_* (jo Kurnool-branded nikle) +
+    # global filler se pehle hai, taaki har channel apna sahi identifier dikhaye.
+    # geo filler 1080p/Main hota hai → 720p baseline 25fps me normalize (clean -c copy).
+    geo_filler = _get_filler_path(channel_name, global_fallback=False)
+    if geo_filler:
+        norm = NOTEBOOKLM_CACHE_DIR.resolve() / (geo_filler.stem + "_norm.mp4")
+        if norm.exists() and norm.stat().st_mtime < geo_filler.stat().st_mtime:
+            norm.unlink()                       # geo source refresh hua → re-normalize
+        norm = _normalize_for_stream(geo_filler)
+        if norm:
+            debug(f"[{channel_name}] No bulletins — geo filler (per-location): {geo_filler.name}")
+            return [norm]
+    # Geo filler nahi mila — purana fallback: combined (intro+notebooklm) → intro → global.
     combined = _build_combined_filler(channel_name)
     if combined:
         debug(f"[{channel_name}] No bulletins — combined filler: {combined.name}")
@@ -1029,14 +1349,15 @@ def _with_fallback(folder, channel_name):
     if intro:
         debug(f"[{channel_name}] No bulletins — intro-only loop: {intro.name}")
         return [intro]
-    if FILLER_FILE.exists():
-        debug(f"[{channel_name}] No intro found — filler loop")
-        return [FILLER_FILE]
+    filler = _get_filler_path(channel_name)   # per-location geo filler, global fallback
+    if filler:
+        debug(f"[{channel_name}] No intro — filler loop: {filler.name}")
+        return [filler]
     return []
 
 
 def _launch_streams(inject_type=None, inject_payload=None):
-    active = CHANNEL_DEFS[:STREAM_COUNT]
+    active = _active_channels()
     procs  = []
     prepare_overlay()
 
@@ -1059,7 +1380,7 @@ def _launch_streams(inject_type=None, inject_payload=None):
 
 
 def _terminate_streams(procs):
-    for proc, ch in zip(procs, CHANNEL_DEFS):
+    for proc, ch in zip(procs, _active_channels()):
         if proc and proc.poll() is None:
             try: proc.terminate(); stream_down(ch["label"])
             except: pass
@@ -1071,7 +1392,7 @@ def run_streamer():
     kill_ffmpeg()
     time.sleep(2)
     debug("=== Streamer Started ===")
-    for ch in CHANNEL_DEFS[:STREAM_COUNT]:
+    for ch in _active_channels():
         debug(f"  {ch['label']} ← {ch['watch_dir']}")
 
     if not CHANNEL_DEFS[0]["stream_key"]:
@@ -1079,8 +1400,8 @@ def run_streamer():
 
     start_background_threads()
 
-    active     = CHANNEL_DEFS[:STREAM_COUNT]
-    procs      = [None] * STREAM_COUNT
+    active     = _active_channels()
+    procs      = [None] * len(active)
     last_buls  = [[] for _ in active]
     last_check = time.time()
     inject_type = inject_payload = None
@@ -1113,7 +1434,7 @@ def run_streamer():
                     else:
                         debug(f"Slot [{seg_type}] — restarting to inject")
                         _terminate_streams(procs)
-                        procs = [None] * STREAM_COUNT
+                        procs = [None] * len(active)
                         inject_type = seg_type; inject_payload = payload
                         break
 

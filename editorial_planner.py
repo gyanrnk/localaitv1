@@ -4,11 +4,13 @@ from config import EDITORIAL_PLANNER_PROMPT, WORDS_PER_SECOND_TTS
 
 
 # ── Timing constants (must match config.py budget) ────────────────────────────
-MAX_INTRO_WORDS    = round(15 * WORDS_PER_SECOND_TTS)   # ~33 words  (~15s)
-MAX_ANALYSIS_WORDS = round(16 * WORDS_PER_SECOND_TTS)   # ~35 words  (~16s)
+# 50/50 model: item ≤ 45s, clip = 50% (~22s), intro+analysis = 50% (~22s).
+# narration (intro+analysis) ≈ 22s so clip (≈22s) gives a true 50/50 split.
+MAX_INTRO_WORDS    = round(10 * WORDS_PER_SECOND_TTS)   # ~10s  (narration half: intro)
+MAX_ANALYSIS_WORDS = round(12 * WORDS_PER_SECOND_TTS)   # ~12s  (narration half: analysis)
 MIN_CLIP_DUR       = 8.0    # seconds
-MAX_CLIP_DUR       = 20.0   # seconds
-HARD_TOTAL_CAP     = 59.0   # seconds
+MAX_CLIP_DUR       = 23.0   # seconds  (clip ≈ 50% of a 45s item)
+HARD_TOTAL_CAP     = 45.0   # seconds  (item = intro+clip+analysis)
 
 
 class EditorialPlanner:
@@ -121,7 +123,7 @@ class EditorialPlanner:
             if not analysis or len(analysis.split()) < 5:
                 return self._fallback_plan()
 
-            # ── 59-second total budget check ──────────────────────────────────
+            # ── 45-second total budget check (50/50 clip:narration) ───────────
             intro_dur    = len(intro.split())    / WORDS_PER_SECOND_TTS
             analysis_dur = len(analysis.split()) / WORDS_PER_SECOND_TTS
             total_est    = intro_dur + clip_dur + analysis_dur
