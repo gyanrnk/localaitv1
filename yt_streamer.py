@@ -387,11 +387,16 @@ def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None
     try:
         import requests
         from datetime import datetime
-        from config import LOCATION_TELUGU_MAP, LOCATION_MAP
+        from config import LOCATION_TELUGU_MAP, LOCATION_MAP, geo_district_prefix
 
         # 1. S3 pe upload (video_url ke liye)
+        # PROCESSED notebooklm bulletin ab geo/ me LOCATION-WISE store hota hai
+        # (raw notebooklm/ ka sibling: .../<district>/notebooklm_processed/).
+        # Fallback: agar channel geo-map me nahi mila to legacy bulletins/<channel>/.
         ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
-        s3_key = f"bulletins/{channel_name}/nlm_{kind}_{ts}.mp4"
+        _gp    = geo_district_prefix(channel_name)
+        s3_key = (f"{_gp}/notebooklm_processed/nlm_{kind}_{ts}.mp4" if _gp
+                  else f"bulletins/{channel_name}/nlm_{kind}_{ts}.mp4")
         _s3_client_main().upload_file(str(video_path), S3_BUCKET_MAIN, s3_key)
         region    = os.getenv("AWS_REGION", "ap-south-2")
         video_url = f"https://{S3_BUCKET_MAIN}.s3.{region}.amazonaws.com/{s3_key}"
