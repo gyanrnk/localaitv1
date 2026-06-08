@@ -246,11 +246,15 @@ def fetch_latest_program(channel_name: str, kind: str) -> "Path | None":
     if not S3_BUCKET_MAIN:
         debug("program: S3_BUCKET_NAME not set"); return None
 
-    from config import geo_district_prefix, geo_state_prefix
+    from config import geo_district_prefix, geo_state_prefix, channel_state
     prefixes = []
-    if kind == "state":
-        # State-wide notebooklm — geo/states/{state}/_state/notebooklm/ se har
-        # district ke local+district channel me fan-out (legacy path nahi hota).
+    if kind == "national":
+        # National notebooklm — geo/national/notebooklm/ (SHARED by ALL channels;
+        # built ONCE, stored once, render pe sab channels me fan-out).
+        prefixes.append("geo/national/notebooklm/")
+    elif kind == "state":
+        # State-wide notebooklm — geo/states/{state}/_state/notebooklm/ (SHARED by all
+        # districts of that state; built ONCE per state, stored once, render pe fan-out).
         sp = geo_state_prefix(channel_name)
         if sp:
             prefixes.append(f"{sp}/notebooklm/")
@@ -267,8 +271,15 @@ def fetch_latest_program(channel_name: str, kind: str) -> "Path | None":
             if not mp4s:
                 continue
             latest   = max(mp4s, key=lambda o: (_natural_sort_key(o["Key"]), o["LastModified"]))
-            # cache name me channel+kind taaki same filename alag kinds me na takraye
-            safe     = f"{channel_name.lower()}_{kind}_" + Path(latest["Key"]).name
+            # cache name me channel+kind taaki same filename alag kinds me na takraye.
+            # state/national raw SHARED hai → download cache bhi SCOPE-keyed (per-channel
+            # nahi) — ek hi local file, taaki build dedup ho aur baar-baar re-download na ho.
+            if kind == "national":
+                safe = "_national_" + Path(latest["Key"]).name
+            elif kind == "state":
+                safe = f"_state_{channel_state(channel_name)}_" + Path(latest["Key"]).name
+            else:
+                safe = f"{channel_name.lower()}_{kind}_" + Path(latest["Key"]).name
             local    = NOTEBOOKLM_CACHE_DIR.resolve() / safe
             s3_mtime = latest["LastModified"].timestamp()
             fresh = (local.exists() and local.stat().st_size > 100_000
@@ -299,8 +310,18 @@ def build_program_bulletin(channel_name: str, kind: str,
         debug(f"[{channel_name}/{kind}] No source file — skipping {kind} bulletin")
         return None
 
-    key      = channel_name.lower().replace(' ', '_').replace('-', '_')
-    out_base = Path(out_dir) / channel_name
+    # state/national = SHARED content → build ONCE (scope-keyed output, per-channel nahi):
+    # pehla channel build karega, baaki cache-hit → 1 build per state / 1 national build.
+    # local/district = per-district content → per-channel output (jaisa tha).
+    if kind == "national":
+        key, out_base = "national", Path(out_dir) / "_national"
+    elif kind == "state":
+        from config import channel_state
+        st       = channel_state(channel_name) or "state"
+        key, out_base = st, Path(out_dir) / f"_state_{st}"
+    else:
+        key      = channel_name.lower().replace(' ', '_').replace('-', '_')
+        out_base = Path(out_dir) / channel_name
     out_base.mkdir(parents=True, exist_ok=True)
     out      = out_base / f"{kind}_bulletin_{key}.mp4"
 
@@ -386,15 +407,24 @@ def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None
         return
     try:
         from datetime import datetime
-        from config import geo_district_prefix
+        from config import geo_district_prefix, geo_state_prefix
 
-        # PROCESSED notebooklm bulletin geo/ me LOCATION-WISE store hota hai
-        # (raw notebooklm/ ka sibling: .../<district>/notebooklm_processed/).
-        # Fallback: agar channel geo-map me nahi mila to legacy bulletins/<channel>/.
-        ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _gp    = geo_district_prefix(channel_name)
-        s3_key = (f"{_gp}/notebooklm_processed/nlm_{kind}_{ts}.mp4" if _gp
-                  else f"bulletins/{channel_name}/nlm_{kind}_{ts}.mp4")
+        # PROCESSED notebooklm geo/ me store hota hai. SHARED scopes = SINGLE copy:
+        #   national → geo/national/notebooklm_processed/           (sab channels me fan-out)
+        #   state    → geo/states/<state>/_state/notebooklm_processed/ (us state ke districts me fan-out)
+        # PER-DISTRICT scopes (alag content) = per-district:
+        #   local/district → geo/states/<state>/districts/<dist>/notebooklm_processed/
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if kind == "national":
+            s3_key = f"geo/national/notebooklm_processed/nlm_national_{ts}.mp4"
+        elif kind == "state":
+            _sp = geo_state_prefix(channel_name)
+            s3_key = (f"{_sp}/notebooklm_processed/nlm_state_{ts}.mp4" if _sp
+                      else f"bulletins/{channel_name}/nlm_state_{ts}.mp4")
+        else:
+            _gp = geo_district_prefix(channel_name)
+            s3_key = (f"{_gp}/notebooklm_processed/nlm_{kind}_{ts}.mp4" if _gp
+                      else f"bulletins/{channel_name}/nlm_{kind}_{ts}.mp4")
         _s3_client_main().upload_file(str(video_path), S3_BUCKET_MAIN, s3_key,
                                       ExtraArgs={'ContentType': 'video/mp4'})
         marker.write_text(s3_key)        # is build ko 'uploaded' mark karo (re-upload avoid)
@@ -975,14 +1005,14 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
             nlm_local    = build_program_bulletin(channel_name, "local")
             nlm_district = build_program_bulletin(channel_name, "district")
             nlm_state    = build_program_bulletin(channel_name, "state")
-            # /api/bulletins POST — notebooklm bulletin ko UI feed me bhejo (citizen
-            # bulletins jaise). build_program_bulletin ka cache + .sent marker mil ke
-            # ensure karte hain: POST sirf EK BAAR per NAYA notebooklm (har cycle nahi).
-            # Gate: PROGRAM_BULLETIN_API_ENABLED=true (sirf prod compose) — local test
-            # me flag absent hone se accidental production POST nahi hota.
+            nlm_national = build_program_bulletin(channel_name, "national")
+            # S3 upload (PATH 2). state/national SHARED build hai — cache + scope-keyed
+            # .sent marker ensure karte hain: build + upload sirf EK BAAR per state/nation
+            # (har channel cache-hit). local/district per-district.
             if nlm_local:    _maybe_send_program_to_api(channel_name, "local",    nlm_local)
             if nlm_district: _maybe_send_program_to_api(channel_name, "district", nlm_district)
             if nlm_state:    _maybe_send_program_to_api(channel_name, "state",    nlm_state)
+            if nlm_national: _maybe_send_program_to_api(channel_name, "national", nlm_national)
         except Exception as e:
             debug(f"[{label}] program bulletin build error: {e}")
 

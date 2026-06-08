@@ -2376,7 +2376,7 @@ def notebooklm_processed_bulletins():
     newest first — poll this to render in the UI.
     Optional filters: ?channel= & ?location_id= & ?kind=local|district|state."""
     import s3_storage as _s3
-    from config import LOCATION_ID_TO_CHANNEL, geo_district_prefix
+    from config import LOCATION_ID_TO_CHANNEL, geo_district_prefix, geo_state_prefix
     cl, bkt = _s3._get_client(), _s3._bucket()
     ch_f   = (request.args.get('channel') or '').strip().lower()
     loc_f  = (request.args.get('location_id') or '').strip()
@@ -2396,15 +2396,21 @@ def notebooklm_processed_bulletins():
         loc_id = _ch_to_loc.get(ch.lower(), 0)
         if loc_f and str(loc_id) != loc_f:
             continue
-        # PRIMARY: geo/.../<district>/notebooklm_processed/  (new location-wise store)
-        # LEGACY: bulletins/<channel>/  (pre-migration files; still served until they
-        #         age out, so nothing disappears abruptly during the transition).
+        # Per-scope source prefix + allowed kinds. SHARED scopes fan-out:
+        #   state    → ek hi _state/ file se us state ke HAR district me (channel ka location_id)
+        #   national → ek hi national/ file se SAB channels me
+        # local/district → per-district. Per-prefix kind RESTRICT taaki purane per-district
+        # nlm_state (district folder me pade) DUPLICATE na ho jaayein.
         _gp = geo_district_prefix(ch)
-        prefixes = []
+        _sp = geo_state_prefix(ch)
+        sources = []
         if _gp:
-            prefixes.append(f"{_gp}/notebooklm_processed/")
-        prefixes.append(f'bulletins/{ch}/')
-        for pfx in prefixes:
+            sources.append((f"{_gp}/notebooklm_processed/", {'local', 'district'}))
+        if _sp:
+            sources.append((f"{_sp}/notebooklm_processed/", {'state'}))          # state fan-out
+        sources.append(("geo/national/notebooklm_processed/", {'national'}))     # national fan-out
+        sources.append((f'bulletins/{ch}/', {'local', 'district', 'state', 'national'}))  # legacy
+        for pfx, allowed in sources:
             try:
                 res = cl.list_objects_v2(Bucket=bkt, Prefix=pfx)
                 for o in res.get('Contents', []):
@@ -2414,6 +2420,8 @@ def notebooklm_processed_bulletins():
                         continue
                     parts = fn.split('_')
                     kind = parts[1] if len(parts) >= 3 else ''
+                    if kind not in allowed:
+                        continue
                     if kind_f and kind != kind_f:
                         continue
                     url = cl.generate_presigned_url(

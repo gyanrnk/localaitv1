@@ -219,7 +219,9 @@ re-render. A new bulletin appears in the next poll after it's built. No websocke
 | **RAW** (admin upload, national) | `geo/national/notebooklm/<file>.mp4` |
 | **RAW** (state) | `geo/states/<state>/_state/notebooklm/<file>.mp4` |
 | **RAW** (district) | `geo/states/<state>/districts/<district>/<local\|district>/notebooklm/<file>.mp4` |
-| **PROCESSED** (what you render) | `geo/states/<state>/districts/<district>/notebooklm_processed/nlm_<kind>_<ts>.mp4` |
+| **PROCESSED — local/district** | `geo/states/<state>/districts/<district>/notebooklm_processed/nlm_<local\|district>_<ts>.mp4` (per-district — content differs per district) |
+| **PROCESSED — state** | `geo/states/<state>/_state/notebooklm_processed/nlm_state_<ts>.mp4` (ONE per state, fanned out to its districts at render) |
+| **PROCESSED — national** | `geo/national/notebooklm_processed/nlm_national_<ts>.mp4` (ONE, fanned out to all channels at render) |
 
 You never touch S3 directly — the APIs give you presigned URLs. The `key` field is shown
 only for reference/debugging.
