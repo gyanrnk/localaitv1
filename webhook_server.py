@@ -2351,7 +2351,9 @@ def notebooklm_list():
                 if not o['Key'].endswith('.mp4') or o['Size'] <= 0:
                     continue
                 url = cl.generate_presigned_url(
-                    'get_object', Params={'Bucket': bkt, 'Key': o['Key']}, ExpiresIn=3600)
+                    'get_object',
+                    Params={'Bucket': bkt, 'Key': o['Key'],
+                            'ResponseContentType': 'video/mp4'}, ExpiresIn=3600)
                 items.append({
                     'scope': scope, 'state': st, 'district': d, 'kind': k,
                     'filename': o['Key'].split('/')[-1], 'key': o['Key'],
@@ -2374,7 +2376,7 @@ def notebooklm_processed_bulletins():
     newest first — poll this to render in the UI.
     Optional filters: ?channel= & ?location_id= & ?kind=local|district|state."""
     import s3_storage as _s3
-    from config import LOCATION_ID_TO_CHANNEL, geo_district_prefix
+    from config import LOCATION_ID_TO_CHANNEL, geo_district_prefix, geo_state_prefix
     cl, bkt = _s3._get_client(), _s3._bucket()
     ch_f   = (request.args.get('channel') or '').strip().lower()
     loc_f  = (request.args.get('location_id') or '').strip()
@@ -2384,6 +2386,20 @@ def notebooklm_processed_bulletins():
     # the reverse of the news-routing map; matches citizen bulletins/incidents/reports
     # so the UI maps each NotebookLM bulletin to the correct location.
     _ch_to_loc = {v.lower(): int(k) for k, v in LOCATION_ID_TO_CHANNEL.items()}
+    # Bulletin filename → kind. NEW Telugu naam: <telugu>_vaartalu_<date>.mp4.
+    # OLD naam: nlm_<kind>_<ts>.mp4 (transition ke liye dono parse hote hain).
+    _te_to_kind = {'sthanika': 'local', 'jilla': 'district', 'rashtra': 'state', 'jatiya': 'national'}
+    # Clean Telugu DISPLAY title per kind (UI me 'title' dikhao, 'filename' nahi —
+    # filename S3 ke liye ASCII hai; title me telugu script, no underscore/.mp4).
+    _kind_title = {'local': 'స్థానిక వార్తలు', 'district': 'జిల్లా వార్తలు',
+                   'state': 'రాష్ట్ర వార్తలు', 'national': 'జాతీయ వార్తలు'}
+    # Readable date in IST, e.g. "8th June 2026" (UI me title ke saath dikhane ke liye)
+    from datetime import timezone as _tz, timedelta as _td
+    _IST = _tz(_td(hours=5, minutes=30))
+    def _pretty_date(_dt):
+        _d = _dt.astimezone(_IST); _n = _d.day
+        _suf = 'th' if 11 <= _n % 100 <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(_n % 10, 'th')
+        return f"{_n}{_suf} {_d.strftime('%B %Y')}"
     # Streamer channels (Anatpur is fully skipped, so excluded)
     CHANNELS = ['Khammam', 'Kurnool', 'Karimnagar', 'Kakinada', 'Nalore',
                 'Tirupati', 'Guntur', 'Warangal', 'Nalgonda']
@@ -2394,31 +2410,49 @@ def notebooklm_processed_bulletins():
         loc_id = _ch_to_loc.get(ch.lower(), 0)
         if loc_f and str(loc_id) != loc_f:
             continue
-        # PRIMARY: geo/.../<district>/notebooklm_processed/  (new location-wise store)
-        # LEGACY: bulletins/<channel>/  (pre-migration files; still served until they
-        #         age out, so nothing disappears abruptly during the transition).
+        # Per-scope source prefix + allowed kinds. SHARED scopes fan-out:
+        #   state    → ek hi _state/ file se us state ke HAR district me (channel ka location_id)
+        #   national → ek hi national/ file se SAB channels me
+        # local/district → per-district. Per-prefix kind RESTRICT taaki purane per-district
+        # nlm_state (district folder me pade) DUPLICATE na ho jaayein.
         _gp = geo_district_prefix(ch)
-        prefixes = []
+        _sp = geo_state_prefix(ch)
+        sources = []
         if _gp:
-            prefixes.append(f"{_gp}/notebooklm_processed/")
-        prefixes.append(f'bulletins/{ch}/')
-        for pfx in prefixes:
+            sources.append((f"{_gp}/notebooklm_processed/", {'local', 'district'}))
+        if _sp:
+            sources.append((f"{_sp}/notebooklm_processed/", {'state'}))          # state fan-out
+        sources.append(("geo/national/notebooklm_processed/", {'national'}))     # national fan-out
+        sources.append((f'bulletins/{ch}/', {'local', 'district', 'state', 'national'}))  # legacy
+        for pfx, allowed in sources:
             try:
                 res = cl.list_objects_v2(Bucket=bkt, Prefix=pfx)
                 for o in res.get('Contents', []):
                     fn = o['Key'].split('/')[-1]
-                    # processed notebooklm files: nlm_<kind>_<timestamp>.mp4
-                    if not (fn.startswith('nlm_') and fn.endswith('.mp4')) or o['Size'] <= 0:
+                    if not fn.endswith('.mp4') or o['Size'] <= 0:
                         continue
-                    parts = fn.split('_')
-                    kind = parts[1] if len(parts) >= 3 else ''
+                    # naam: <telugu>_vaartalu_<date>.mp4 (naya) | nlm_<kind>_<ts>.mp4 (purana)
+                    p0 = fn.split('_')[0]
+                    if fn.startswith('nlm_'):
+                        _pp = fn.split('_'); kind = _pp[1] if len(_pp) >= 3 else ''
+                    elif p0 in _te_to_kind:
+                        kind = _te_to_kind[p0]
+                    else:
+                        continue
+                    if kind not in allowed:
+                        continue
                     if kind_f and kind != kind_f:
                         continue
                     url = cl.generate_presigned_url(
-                        'get_object', Params={'Bucket': bkt, 'Key': o['Key']}, ExpiresIn=3600)
+                        'get_object',
+                        Params={'Bucket': bkt, 'Key': o['Key'],
+                                'ResponseContentType': 'video/mp4'}, ExpiresIn=3600)
                     items.append({
                         'channel': ch, 'location_id': int(loc_id) if loc_id else 0,
-                        'kind': kind, 'filename': fn, 'key': o['Key'],
+                        'kind': kind,
+                        'title': _kind_title.get(kind, kind),       # clean Telugu (UI me dikhao)
+                        'date': _pretty_date(o['LastModified']),     # "8th June 2026" (IST, readable)
+                        'filename': fn, 'key': o['Key'],
                         'url': url, 'size': o['Size'],
                         'lastModified': o['LastModified'].isoformat(),
                     })
