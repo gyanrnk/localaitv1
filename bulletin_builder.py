@@ -1273,9 +1273,13 @@ METADATA_FILE = os.path.join(BASE_OUTPUT_DIR, 'metadata.json')
 BULLETINS_DIR = os.path.join(BASE_OUTPUT_DIR, 'bulletins')
 
 PRIORITY_RANK = {
-    'breaking': 0,
-    'urgent':   1,
-    'normal':   2,
+    'breaking':  0,
+    'emergency': 0,
+    'viral':     0,
+    'alert':     0,
+    'urgent':    1,
+    'high':      1,
+    'normal':    2,
 }
 
 def _load_ticker_cursor() -> float:
@@ -1551,23 +1555,64 @@ def append_news_item(item: Dict):
 
 #     return sorted(items, key=sort_key)
 
+# ── Story-priority helpers (Task #10) ─────────────────────────────────────────
+# Viral/Emergency stories ko detect karne ke liye Telugu + English keywords.
+_EMERGENCY_KEYWORDS = (
+    'మరణ', 'మృతి', 'హత్య', 'ప్రమాద', 'దుర్ఘటన', 'అగ్ని', 'వరద', 'భూకంప',
+    'విస్ఫోట', 'అత్యవసర', 'బ్రేకింగ్', 'హెచ్చరిక', 'ప్రాణ', 'తక్షణ', 'విషాద',
+    'breaking', 'emergency', 'urgent', 'viral', 'alert',
+)
+_EMERGENCY_PRIORITIES = {'breaking', 'emergency', 'urgent', 'viral', 'high', 'alert'}
+# Recency buckets (hours): 3h, 6h, 12h, 24h, 48h, 72h — newer = higher priority.
+_AGE_BUCKETS_HOURS = (3, 6, 12, 24, 48, 72)
+
+
+def _is_emergency(item: Dict) -> bool:
+    """Viral/Emergency story? — explicit priority field OR keyword in headline/text."""
+    pr = (item.get('priority') or 'normal').strip().lower()
+    if pr in _EMERGENCY_PRIORITIES:
+        return True
+    text = ((item.get('headline') or '') + ' ' + (item.get('original_text') or '')).lower()
+    return any(k in text for k in _EMERGENCY_KEYWORDS)
+
+
+def _age_bucket(ts_str) -> int:
+    """0=<3h, 1=<6h, 2=<12h, 3=<24h, 4=<48h, 5=<72h, 6=>72h. Lower = newer = higher."""
+    from datetime import timezone
+    try:
+        ts = datetime.fromisoformat(str(ts_str).replace('Z', '+00:00'))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
+    except Exception:
+        return len(_AGE_BUCKETS_HOURS)   # unknown age → oldest bucket
+    for i, h in enumerate(_AGE_BUCKETS_HOURS):
+        if age_h <= h:
+            return i
+    return len(_AGE_BUCKETS_HOURS)        # > 72h
+
+
 def rank_news_items(items: List[Dict]) -> List[Dict]:
     """
-    Priority order:
-    1. breaking/urgent pehle
-    2. Unused items pehle (used_count == 0)
-    3. Nayi items pehle (timestamp descending) — yahi main fix hai
-    4. Choti duration pehle (budget fit hone ke liye)
+    Story-priority ladder (Task #10):
+      1. Unpublished News  — never aired (used_count == 0)        → top
+      2. Viral/Emergency   — breaking/accident/death/etc.          → next
+      3. Recency buckets   — 3h → 6h → 12h → 24h → 48h → 72h       (newer first)
+      (>72h → lowest tier; shorter duration breaks ties for budget fit.)
     """
     def sort_key(item):
-        priority = PRIORITY_RANK.get(item.get('priority', 'normal').lower(), 2)
-        used     = item.get('used_count', 0)
+        unpublished = 0 if item.get('used_count', 0) == 0 else 1   # tier 1
+        emergency   = 0 if _is_emergency(item) else 1              # tier 2
+        bucket      = _age_bucket(item.get('timestamp'))           # tier 3 (newer first)
+        used        = item.get('used_count', 0)
         try:
-            ts = datetime.fromisoformat(item.get('timestamp', '1970-01-01T00:00:00')).timestamp()
+            ts = datetime.fromisoformat(
+                str(item.get('timestamp', '1970-01-01T00:00:00')).replace('Z', '+00:00')
+            ).timestamp()
         except Exception:
             ts = 0
         dur = float(item.get('total_duration', 999))
-        return (priority, used, -ts, dur)  # -ts = newest first
+        return (unpublished, emergency, bucket, used, -ts, dur)
 
     return sorted(items, key=sort_key)
 
