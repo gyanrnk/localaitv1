@@ -398,7 +398,21 @@ def build_intro_segment(intro_path: str, out_path: str) -> bool:
 _reporter_png_cache: dict = {} 
 def _create_reporter_card_png(name: str, photo_path: str = None) -> Optional[str]:
     import hashlib
- 
+
+    # ── Portability: the stored photo_path may be an absolute *container* path
+    # (e.g. /app/outputs/reporters/reporter_<id>.jpg) that doesn't exist on this
+    # host. Re-resolve by basename against the local REPORTER_PHOTO_DIR so the
+    # reporter photo still renders off-container (same idea as the slideshow
+    # image-path fix). A path that already exists is used as-is.
+    if photo_path and not os.path.exists(photo_path):
+        try:
+            from config import REPORTER_PHOTO_DIR as _RPDIR
+            _cand = os.path.join(_RPDIR, os.path.basename(photo_path))
+            if os.path.exists(_cand):
+                photo_path = _cand
+        except Exception:
+            pass
+
     # HTML pehle banao, uska hash cache key banega
     has_photo = bool(photo_path and os.path.exists(photo_path))
     
@@ -3051,11 +3065,16 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
  
             tickered_path = final_path.replace('.mp4', '_tickered.mp4')
  
+            # location_id (this channel's) so the ticker's headline fallback also
+            # filters per-channel when ticker_text is empty.
+            _ticker_loc_id = next((it.get('location_id') for it in items
+                                   if it.get('type') == 'news' and it.get('location_id') is not None), None)
             if add_ticker_overlay(staging_path, tickered_path,
                                 filler_start=filler_start_time,
                                 skip_ranges=injection_skip_ranges if injection_skip_ranges else None,
                                 ticker_text=ticker_text,
-                                channel_name=channel_name):
+                                channel_name=channel_name,
+                                location_id=_ticker_loc_id):
                 # Ticker done → atomic rename to final name
                 import time as _t2
                 for _ta in range(6):

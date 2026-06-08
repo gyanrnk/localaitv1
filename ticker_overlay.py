@@ -647,7 +647,8 @@ def add_ticker_overlay(video_path: str, out_path: str,
                        filler_start: float = None,
                        skip_ranges: list = None,
                        ticker_text: str = None,
-                       channel_name: str = '') -> bool:
+                       channel_name: str = '',
+                       location_id=None) -> bool:
     import time as _time
 
     print("\n" + "─" * 50)
@@ -668,10 +669,10 @@ def add_ticker_overlay(video_path: str, out_path: str,
         headlines = [' '.join(h.split()) for h in ticker_text.split('★')]
         headlines = [h for h in headlines if h]
         if not headlines:
-            headlines = _load_24hr_headlines()
+            headlines = _load_24hr_headlines(location_id)
         print(f"  ✅ [TICKER] {len(headlines)} headlines from ticker_text arg")
     else:
-        headlines = _load_24hr_headlines()
+        headlines = _load_24hr_headlines(location_id)
     ad_text   = _load_ad_texts(channel_name)
 
     try:
