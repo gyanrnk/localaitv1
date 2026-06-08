@@ -79,13 +79,14 @@ This decides **where** a NotebookLM uploaded by the admin shows up in the UI.
 
 ### 2.3 What you get back on render — the `kind`
 
-Each channel/location can have up to **three** NotebookLM bulletins:
+Each channel/location can have up to **four** NotebookLM bulletins:
 
 | `kind` (in the render response) | source | meaning |
 |---|---|---|
 | `local` | that district's local upload | hyperlocal |
 | `district` | that district's district upload | district-level |
-| `state` | the state-wide upload, **fanned out to this district** | state news, with this channel's own intro+anchor |
+| `state` | the state-wide upload, **fanned out to this district** | state news (with the state intro) |
+| `national` | the national upload, **fanned out to every channel** | nation-wide news (one bulletin shown on all channels, with the national intro) |
 
 Each render item carries a **`location_id`** so you place it under the correct channel.
 
@@ -170,7 +171,7 @@ Optional filters (omit for everything):
 |---|---|
 | `channel` | `Kurnool, Guntur, Kakinada, Nalore, Tirupati, Khammam, Karimnagar, Warangal, Nalgonda` |
 | `location_id` | backend location id (`305`=Kurnool, `161`=Khammam, `335`=Tirupati, …) |
-| `kind` | `local` \| `district` \| `state` |
+| `kind` | `local` \| `district` \| `state` \| `national` |
 
 Response `200`:
 ```json
@@ -182,6 +183,8 @@ Response `200`:
       "channel": "Kurnool",
       "location_id": 305,
       "kind": "local",
+      "title": "స్థానిక వార్తలు",
+      "date": "08-06-2026",
       "filename": "sthanika_vaartalu_20260608.mp4",
       "key": "geo/states/andhra_pradesh/districts/kurnool/notebooklm_processed/sthanika_vaartalu_20260608.mp4",
       "url": "https://…s3.ap-south-2…&X-Amz-Signature=…",
@@ -195,7 +198,8 @@ Field meaning:
 - **`url`** — playable `.mp4`, drop into a `<video>` tag. **Expires in 1 hour** → re-fetch the
   list for a fresh URL (don't cache `url` long-term).
 - **`location_id`** — which channel/location this belongs to (matches citizen bulletins/reports).
-- **`kind`** — `local` / `district` / `state` (see §2.3) → place it in the right section.
+- **`title`** — clean **Telugu display name** (e.g. `రాష్ట్ర వార్తలు`). **Show THIS in the UI, not `filename`** — `filename` is an internal ASCII S3 key (underscores/.mp4). `date` is a ready `DD-MM-YYYY` string.
+- **`kind`** — `local` / `district` / `state` / `national` (see §2.3) → place it in the right section.
 - **`lastModified`** — items are **newest-first**; the first matching item = the latest.
 
 ### React example
@@ -253,9 +257,9 @@ Nalore 285 · Kurnool 305 · Tirupati 335 · Guntur 344
 ---
 
 ## 7. Caveats / notes
-- **`national` scope is not processed yet** — a national upload is stored but does **not**
-  currently produce a bulletin. Use **state / district / local** for now (confirm with Gyana
-  before exposing `national` in the form).
+- **`national` is now LIVE** — a national upload is processed into ONE bulletin and **fanned
+  out to every channel** (`kind=national`, with the national intro). state / district / local
+  all work too. (Render: make sure the UI handles the `national` kind.)
 - **`url` (both endpoints) expires in 1 hour** — re-fetch; don't persist it.
 - **NotebookLM is NOT in the citizen `/api/bulletins` feed** — it has its own dedicated
   endpoint (#2). Don't look for it in the citizen feed.

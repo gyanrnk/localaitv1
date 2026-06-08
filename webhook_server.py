@@ -2389,6 +2389,10 @@ def notebooklm_processed_bulletins():
     # Bulletin filename → kind. NEW Telugu naam: <telugu>_vaartalu_<date>.mp4.
     # OLD naam: nlm_<kind>_<ts>.mp4 (transition ke liye dono parse hote hain).
     _te_to_kind = {'sthanika': 'local', 'jilla': 'district', 'rashtra': 'state', 'jatiya': 'national'}
+    # Clean Telugu DISPLAY title per kind (UI me 'title' dikhao, 'filename' nahi —
+    # filename S3 ke liye ASCII hai; title me telugu script, no underscore/.mp4).
+    _kind_title = {'local': 'స్థానిక వార్తలు', 'district': 'జిల్లా వార్తలు',
+                   'state': 'రాష్ట్ర వార్తలు', 'national': 'జాతీయ వార్తలు'}
     # Streamer channels (Anatpur is fully skipped, so excluded)
     CHANNELS = ['Khammam', 'Kurnool', 'Karimnagar', 'Kakinada', 'Nalore',
                 'Tirupati', 'Guntur', 'Warangal', 'Nalgonda']
@@ -2438,7 +2442,10 @@ def notebooklm_processed_bulletins():
                                 'ResponseContentType': 'video/mp4'}, ExpiresIn=3600)
                     items.append({
                         'channel': ch, 'location_id': int(loc_id) if loc_id else 0,
-                        'kind': kind, 'filename': fn, 'key': o['Key'],
+                        'kind': kind,
+                        'title': _kind_title.get(kind, kind),       # clean Telugu (UI me dikhao)
+                        'date': o['LastModified'].strftime('%d-%m-%Y'),
+                        'filename': fn, 'key': o['Key'],
                         'url': url, 'size': o['Size'],
                         'lastModified': o['LastModified'].isoformat(),
                     })
