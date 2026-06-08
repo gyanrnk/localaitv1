@@ -25,6 +25,7 @@ S3_PFX_BULLETINS = "bulletins"         # bulletins/{channel}/{bul_name}.mp4
 # Disable automatic checksum injection — prevents AwsChunkedWrapper (non-seekable)
 # from wrapping the upload stream, which breaks botocore retry logic.
 _BOTO_CONFIG = Config(
+    s3={'addressing_style': 'virtual'},
     request_checksum_calculation='when_required',
     response_checksum_validation='when_required',
 )
@@ -37,11 +38,17 @@ def _get_client():
     global _client
     with _lock:
         if _client is None:
+            _region = os.getenv('AWS_REGION', 'ap-south-2')
             _client = boto3.client(
                 's3',
-                region_name=os.getenv('AWS_REGION', 'ap-south-2'),
+                region_name=_region,
                 aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
                 aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+                # ap-south-2 (Hyderabad) opt-in region does NOT serve the legacy global
+                # endpoint (s3.amazonaws.com). Presigned URLs MUST carry the REGIONAL
+                # host (bucket.s3.ap-south-2.amazonaws.com), else a browser PUT/GET 400s.
+                # Server-side boto3 calls auto-redirect, but static presigned URLs don't.
+                endpoint_url=f'https://s3.{_region}.amazonaws.com',
                 config=_BOTO_CONFIG,
             )
     return _client
