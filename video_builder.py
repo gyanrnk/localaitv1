@@ -398,7 +398,21 @@ def build_intro_segment(intro_path: str, out_path: str) -> bool:
 _reporter_png_cache: dict = {} 
 def _create_reporter_card_png(name: str, photo_path: str = None) -> Optional[str]:
     import hashlib
- 
+
+    # ── Portability: the stored photo_path may be an absolute *container* path
+    # (e.g. /app/outputs/reporters/reporter_<id>.jpg) that doesn't exist on this
+    # host. Re-resolve by basename against the local REPORTER_PHOTO_DIR so the
+    # reporter photo still renders off-container (same idea as the slideshow
+    # image-path fix). A path that already exists is used as-is.
+    if photo_path and not os.path.exists(photo_path):
+        try:
+            from config import REPORTER_PHOTO_DIR as _RPDIR
+            _cand = os.path.join(_RPDIR, os.path.basename(photo_path))
+            if os.path.exists(_cand):
+                photo_path = _cand
+        except Exception:
+            pass
+
     # HTML pehle banao, uska hash cache key banega
     has_photo = bool(photo_path and os.path.exists(photo_path))
     
