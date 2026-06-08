@@ -2024,19 +2024,22 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
     unused_items = [x for x in valid_items if x.get('used_count', 0) == 0]
     old_items    = [x for x in valid_items if x.get('used_count', 0) > 0]
 
-    if not unused_items and not old_items:
-        print("❌ No items available (fresh or old) — skipping bulletin build")
+    # ── Anti-repeat gate: minimum FRESH (unaired) news chahiye bulletin trigger ─
+    # Agar itni nayi news nahi aayi, to naya bulletin NAHI banate — purana
+    # bulletin live chalta rehta hai. Isse same purani news baar-baar repeat nahi
+    # hoti. Trigger hone par: 3+ fresh + baaki already-processed (old) milake ek
+    # pura bulletin (old sirf duration fill karne ko). Tunable via MIN_FRESH_ITEMS.
+    MIN_FRESH_ITEMS = int(os.getenv('MIN_FRESH_ITEMS', '3'))
+    if len(unused_items) < MIN_FRESH_ITEMS:
+        print(f"⏭️ Only {len(unused_items)} fresh item(s) "
+              f"(< {MIN_FRESH_ITEMS} required) — skipping build (no repeat). "
+              f"Previous bulletin stays live.")
         return None
 
-    # Fresh pehle (rank order), phir old least-used-first (rank old ko bhi
-    # used_count ascending sort karta hai) → backfill order
+    # Fresh pehle (rank order), phir old least-used-first → backfill to fill budget
     ranked = rank_news_items(unused_items) + rank_news_items(old_items)
-    if unused_items:
-        print(f"  [RANK] {len(unused_items)} fresh + {len(old_items)} old (backfill) "
-              f"— greedy news budget (≈10-min) tak fill karega")
-    else:
-        print(f"  [RANK] No fresh items — building from {len(old_items)} old items "
-              f"(backfill) to keep the stream alive")
+    print(f"  [RANK] {len(unused_items)} fresh + {len(old_items)} old (backfill) "
+          f"— fresh trigger met (>= {MIN_FRESH_ITEMS}); ≈10-min budget tak fill")
 
     intro_dur = INTRO_VIDEO_DURATION
 
