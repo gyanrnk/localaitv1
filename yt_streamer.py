@@ -113,6 +113,40 @@ def _get_intro_path(channel_name: str) -> Path | None:
     return default if default.exists() else None
 
 
+def _get_program_intro(kind: str, channel_name: str) -> "Path | None":
+    """Program-bulletin intro by SCOPE:
+      national → geo/national/intro/                    (S3, single)
+      state    → geo/states/<state>/_state/intro/       (S3, per-state)
+      local/district → channel asset intro (_get_intro_path)
+    state/national intro S3 se download+cache hota hai. Koi geo intro na mile to
+    common channel/intro4 par graceful fallback (bulletin kabhi crash na ho)."""
+    if kind not in ("state", "national"):
+        return _get_intro_path(channel_name)
+    from config import geo_state_prefix
+    if kind == "national":
+        prefix = "geo/national/intro/"
+    else:
+        sp = geo_state_prefix(channel_name)
+        prefix = f"{sp}/intro/" if sp else None
+    if not prefix or not S3_BUCKET_MAIN:
+        return _get_intro_path(channel_name)
+    try:
+        res  = _s3_client_main().list_objects_v2(Bucket=S3_BUCKET_MAIN, Prefix=prefix)
+        mp4s = [o for o in res.get("Contents", []) if o["Key"].endswith(".mp4") and o["Size"] > 0]
+        if not mp4s:
+            return _get_intro_path(channel_name)          # fallback common intro
+        latest   = max(mp4s, key=lambda o: o["LastModified"])
+        local    = NOTEBOOKLM_CACHE_DIR.resolve() / (f"_intro_{kind}_" + Path(latest["Key"]).name)
+        s3_mtime = latest["LastModified"].timestamp()
+        if not (local.exists() and local.stat().st_size > 100_000
+                and local.stat().st_mtime >= s3_mtime):
+            _s3_client_main().download_file(S3_BUCKET_MAIN, latest["Key"], str(local))
+        return local
+    except (BotoCoreError, ClientError) as e:
+        debug(f"[{channel_name}/{kind}] intro fetch error [{prefix}]: {e}")
+        return _get_intro_path(channel_name)
+
+
 def _normalize_for_stream(src: Path) -> Path | None:
     """Return a stream-ready normalized copy of src (25fps, 1920x1080, aac 44100).
     Cached in outputs/notebooklm_cache/ — only runs once per file.
@@ -325,14 +359,21 @@ def build_program_bulletin(channel_name: str, kind: str,
     out_base.mkdir(parents=True, exist_ok=True)
     out      = out_base / f"{kind}_bulletin_{key}.mp4"
 
-    # ── Cache: agar output source (S3 file) se naya hai to dobara concat mat karo ──
+    # Intro SCOPE-wise: state→state intro, national→national intro (geo S3),
+    # local/district→channel intro. Cache-check se PEHLE chahiye (intro mtime bhi
+    # freshness me — intro badle to bulletin rebuild ho).
+    intro = _get_program_intro(kind, channel_name)
+
+    # ── Cache: output source (notebooklm raw YA intro) se naya hai to dobara concat mat karo ──
     # (streamer har cycle me ise call karega — bina cache ke har baar 1-min rebuild)
+    _src_mtime = main.stat().st_mtime
+    if intro and Path(intro).exists():
+        _src_mtime = max(_src_mtime, Path(intro).stat().st_mtime)
     if (out.exists() and out.stat().st_size > 100_000
-            and out.stat().st_mtime >= main.stat().st_mtime):
+            and out.stat().st_mtime >= _src_mtime):
         debug(f"[{channel_name}/{kind}] bulletin cache hit: {out.name}")
         return out
 
-    intro = _get_intro_path(channel_name)                 # channel intro (Kurnool -> intro4.mp4)
     from config import get_anchor_pair
     namaste, thanks = get_anchor_pair(str(_SCRIPT_DIR))   # welcome + ending anchor (SAME person, §13)
 
@@ -383,6 +424,10 @@ def build_notebooklm_bulletin(channel_name: str) -> "Path | None":
 _PROGRAM_KIND_TE = {"local": "స్థానిక వార్తలు", "district": "జిల్లా వార్తలు",
                     "state": "రాష్ట్ర వార్తలు"}
 
+# Bulletin S3 filename = <telugu_kind>_vaartalu_<date>.mp4  (no 'notebooklm'/'nlm' — Telugu, kind-relatable)
+_BULLETIN_NAME_TE = {"local": "sthanika", "district": "jilla",
+                     "state": "rashtra", "national": "jatiya"}
+
 
 def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None:
     """PROCESSED NotebookLM bulletin ko geo/.../notebooklm_processed/ me S3 upload karo
@@ -414,17 +459,20 @@ def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None
         #   state    → geo/states/<state>/_state/notebooklm_processed/ (us state ke districts me fan-out)
         # PER-DISTRICT scopes (alag content) = per-district:
         #   local/district → geo/states/<state>/districts/<dist>/notebooklm_processed/
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Telugu naam, date-wise (ek file per kind per din — overwrite, storage control):
+        #   sthanika/jilla/rashtra/jatiya _vaartalu_<YYYYMMDD>.mp4
+        ts    = datetime.now().strftime("%Y%m%d")
+        _name = f"{_BULLETIN_NAME_TE.get(kind, kind)}_vaartalu_{ts}.mp4"
         if kind == "national":
-            s3_key = f"geo/national/notebooklm_processed/nlm_national_{ts}.mp4"
+            s3_key = f"geo/national/notebooklm_processed/{_name}"
         elif kind == "state":
             _sp = geo_state_prefix(channel_name)
-            s3_key = (f"{_sp}/notebooklm_processed/nlm_state_{ts}.mp4" if _sp
-                      else f"bulletins/{channel_name}/nlm_state_{ts}.mp4")
+            s3_key = (f"{_sp}/notebooklm_processed/{_name}" if _sp
+                      else f"bulletins/{channel_name}/{_name}")
         else:
             _gp = geo_district_prefix(channel_name)
-            s3_key = (f"{_gp}/notebooklm_processed/nlm_{kind}_{ts}.mp4" if _gp
-                      else f"bulletins/{channel_name}/nlm_{kind}_{ts}.mp4")
+            s3_key = (f"{_gp}/notebooklm_processed/{_name}" if _gp
+                      else f"bulletins/{channel_name}/{_name}")
         _s3_client_main().upload_file(str(video_path), S3_BUCKET_MAIN, s3_key,
                                       ExtraArgs={'ContentType': 'video/mp4'})
         marker.write_text(s3_key)        # is build ko 'uploaded' mark karo (re-upload avoid)

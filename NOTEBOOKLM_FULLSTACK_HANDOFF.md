@@ -182,8 +182,8 @@ Response `200`:
       "channel": "Kurnool",
       "location_id": 305,
       "kind": "local",
-      "filename": "nlm_local_20260608_101530.mp4",
-      "key": "geo/states/andhra_pradesh/districts/kurnool/notebooklm_processed/nlm_local_20260608_101530.mp4",
+      "filename": "sthanika_vaartalu_20260608.mp4",
+      "key": "geo/states/andhra_pradesh/districts/kurnool/notebooklm_processed/sthanika_vaartalu_20260608.mp4",
       "url": "https://…s3.ap-south-2…&X-Amz-Signature=…",
       "size": 73010548,
       "lastModified": "2026-06-08T10:15:30+00:00"
@@ -219,9 +219,9 @@ re-render. A new bulletin appears in the next poll after it's built. No websocke
 | **RAW** (admin upload, national) | `geo/national/notebooklm/<file>.mp4` |
 | **RAW** (state) | `geo/states/<state>/_state/notebooklm/<file>.mp4` |
 | **RAW** (district) | `geo/states/<state>/districts/<district>/<local\|district>/notebooklm/<file>.mp4` |
-| **PROCESSED — local/district** | `geo/states/<state>/districts/<district>/notebooklm_processed/nlm_<local\|district>_<ts>.mp4` (per-district — content differs per district) |
-| **PROCESSED — state** | `geo/states/<state>/_state/notebooklm_processed/nlm_state_<ts>.mp4` (ONE per state, fanned out to its districts at render) |
-| **PROCESSED — national** | `geo/national/notebooklm_processed/nlm_national_<ts>.mp4` (ONE, fanned out to all channels at render) |
+| **PROCESSED — local/district** | `geo/states/<state>/districts/<district>/notebooklm_processed/<sthanika\|jilla>_vaartalu_<date>.mp4` (per-district — content differs per district) |
+| **PROCESSED — state** | `geo/states/<state>/_state/notebooklm_processed/rashtra_vaartalu_<date>.mp4` (ONE per state, fanned out to its districts at render) |
+| **PROCESSED — national** | `geo/national/notebooklm_processed/jatiya_vaartalu_<date>.mp4` (ONE, fanned out to all channels at render) |
 
 You never touch S3 directly — the APIs give you presigned URLs. The `key` field is shown
 only for reference/debugging.

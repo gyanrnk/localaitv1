@@ -2386,6 +2386,9 @@ def notebooklm_processed_bulletins():
     # the reverse of the news-routing map; matches citizen bulletins/incidents/reports
     # so the UI maps each NotebookLM bulletin to the correct location.
     _ch_to_loc = {v.lower(): int(k) for k, v in LOCATION_ID_TO_CHANNEL.items()}
+    # Bulletin filename → kind. NEW Telugu naam: <telugu>_vaartalu_<date>.mp4.
+    # OLD naam: nlm_<kind>_<ts>.mp4 (transition ke liye dono parse hote hain).
+    _te_to_kind = {'sthanika': 'local', 'jilla': 'district', 'rashtra': 'state', 'jatiya': 'national'}
     # Streamer channels (Anatpur is fully skipped, so excluded)
     CHANNELS = ['Khammam', 'Kurnool', 'Karimnagar', 'Kakinada', 'Nalore',
                 'Tirupati', 'Guntur', 'Warangal', 'Nalgonda']
@@ -2415,11 +2418,16 @@ def notebooklm_processed_bulletins():
                 res = cl.list_objects_v2(Bucket=bkt, Prefix=pfx)
                 for o in res.get('Contents', []):
                     fn = o['Key'].split('/')[-1]
-                    # processed notebooklm files: nlm_<kind>_<timestamp>.mp4
-                    if not (fn.startswith('nlm_') and fn.endswith('.mp4')) or o['Size'] <= 0:
+                    if not fn.endswith('.mp4') or o['Size'] <= 0:
                         continue
-                    parts = fn.split('_')
-                    kind = parts[1] if len(parts) >= 3 else ''
+                    # naam: <telugu>_vaartalu_<date>.mp4 (naya) | nlm_<kind>_<ts>.mp4 (purana)
+                    p0 = fn.split('_')[0]
+                    if fn.startswith('nlm_'):
+                        _pp = fn.split('_'); kind = _pp[1] if len(_pp) >= 3 else ''
+                    elif p0 in _te_to_kind:
+                        kind = _te_to_kind[p0]
+                    else:
+                        continue
                     if kind not in allowed:
                         continue
                     if kind_f and kind != kind_f:
