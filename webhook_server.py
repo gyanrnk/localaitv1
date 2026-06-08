@@ -2393,6 +2393,13 @@ def notebooklm_processed_bulletins():
     # filename S3 ke liye ASCII hai; title me telugu script, no underscore/.mp4).
     _kind_title = {'local': 'స్థానిక వార్తలు', 'district': 'జిల్లా వార్తలు',
                    'state': 'రాష్ట్ర వార్తలు', 'national': 'జాతీయ వార్తలు'}
+    # Readable date in IST, e.g. "8th June 2026" (UI me title ke saath dikhane ke liye)
+    from datetime import timezone as _tz, timedelta as _td
+    _IST = _tz(_td(hours=5, minutes=30))
+    def _pretty_date(_dt):
+        _d = _dt.astimezone(_IST); _n = _d.day
+        _suf = 'th' if 11 <= _n % 100 <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(_n % 10, 'th')
+        return f"{_n}{_suf} {_d.strftime('%B %Y')}"
     # Streamer channels (Anatpur is fully skipped, so excluded)
     CHANNELS = ['Khammam', 'Kurnool', 'Karimnagar', 'Kakinada', 'Nalore',
                 'Tirupati', 'Guntur', 'Warangal', 'Nalgonda']
@@ -2444,7 +2451,7 @@ def notebooklm_processed_bulletins():
                         'channel': ch, 'location_id': int(loc_id) if loc_id else 0,
                         'kind': kind,
                         'title': _kind_title.get(kind, kind),       # clean Telugu (UI me dikhao)
-                        'date': o['LastModified'].strftime('%d-%m-%Y'),
+                        'date': _pretty_date(o['LastModified']),     # "8th June 2026" (IST, readable)
                         'filename': fn, 'key': o['Key'],
                         'url': url, 'size': o['Size'],
                         'lastModified': o['LastModified'].isoformat(),

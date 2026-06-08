@@ -184,7 +184,7 @@ Response `200`:
       "location_id": 305,
       "kind": "local",
       "title": "స్థానిక వార్తలు",
-      "date": "08-06-2026",
+      "date": "8th June 2026",
       "filename": "sthanika_vaartalu_20260608.mp4",
       "key": "geo/states/andhra_pradesh/districts/kurnool/notebooklm_processed/sthanika_vaartalu_20260608.mp4",
       "url": "https://…s3.ap-south-2…&X-Amz-Signature=…",
@@ -198,7 +198,7 @@ Field meaning:
 - **`url`** — playable `.mp4`, drop into a `<video>` tag. **Expires in 1 hour** → re-fetch the
   list for a fresh URL (don't cache `url` long-term).
 - **`location_id`** — which channel/location this belongs to (matches citizen bulletins/reports).
-- **`title`** — clean **Telugu display name** (e.g. `రాష్ట్ర వార్తలు`). **Show THIS in the UI, not `filename`** — `filename` is an internal ASCII S3 key (underscores/.mp4). `date` is a ready `DD-MM-YYYY` string.
+- **`title`** — clean **Telugu display name** (e.g. `రాష్ట్ర వార్తలు`). **Show THIS in the UI, not `filename`** — `filename` is an internal ASCII S3 key (underscores/.mp4). `date` is a ready human label like `8th June 2026` (IST).
 - **`kind`** — `local` / `district` / `state` / `national` (see §2.3) → place it in the right section.
 - **`lastModified`** — items are **newest-first**; the first matching item = the latest.
 
