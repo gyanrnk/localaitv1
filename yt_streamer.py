@@ -364,71 +364,43 @@ _PROGRAM_KIND_TE = {"local": "స్థానిక వార్తలు", "dis
 
 
 def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None:
-    """NotebookLM program bulletin ko /api/bulletins POST karo — once per build.
-    Citizen bulletins jaise hi UI me dikhe. Marker (.sent) se duplicate-send avoid:
-    sirf tab bhejo jab ye build pehle nahi bheja gaya (output source se naya)."""
+    """PROCESSED NotebookLM bulletin ko geo/.../notebooklm_processed/ me S3 upload karo
+    — once per build. UI isse PATH 2 (GET /api/notebooklm/bulletins poll) se uthata hai.
+
+    NOTE: Flow A (/api/bulletins POST — citizen feed me push) HATA diya gaya — notebooklm
+    ab SIRF dedicated GET endpoint se UI me jata hai, citizen feed me push nahi hota.
+    Marker (.sent) se duplicate-upload avoid: sirf tab upload jab build pehle nahi bheja."""
     # Explicit opt-in: sirf jab PROGRAM_BULLETIN_API_ENABLED=true ho (prod compose me).
-    # Local test (flag absent) is se PRODUCTION /api/bulletins pe accidental POST +
-    # S3 upload NAHI karega — kyunki local .env me real BULLETIN_API_TOKEN hota hai.
+    # Local test (flag absent) is se PRODUCTION S3 pe accidental upload NAHI karega.
     if os.getenv("PROGRAM_BULLETIN_API_ENABLED", "").lower() not in ("1", "true", "yes"):
         return
     video_path = Path(video_path)
     if not video_path.exists():
         return
     marker = video_path.with_suffix(".sent")
-    # Is build ke liye already bhej diya? (marker output se naya/barabar)
+    # Is build ke liye already upload kar diya? (marker output se naya/barabar)
     if marker.exists() and marker.stat().st_mtime >= video_path.stat().st_mtime:
         return
-
-    token = os.getenv("BULLETIN_API_TOKEN", "") or os.getenv("LOCALAITV_API_TOKEN", "")
-    if not (token and S3_BUCKET_MAIN):
-        debug(f"[{channel_name}/{kind}] API send skip — token/bucket missing")
+    if not S3_BUCKET_MAIN:
+        debug(f"[{channel_name}/{kind}] upload skip — bucket missing")
         return
     try:
-        import requests
         from datetime import datetime
-        from config import LOCATION_TELUGU_MAP, LOCATION_MAP, geo_district_prefix
+        from config import geo_district_prefix
 
-        # 1. S3 pe upload (video_url ke liye)
-        # PROCESSED notebooklm bulletin ab geo/ me LOCATION-WISE store hota hai
+        # PROCESSED notebooklm bulletin geo/ me LOCATION-WISE store hota hai
         # (raw notebooklm/ ka sibling: .../<district>/notebooklm_processed/).
         # Fallback: agar channel geo-map me nahi mila to legacy bulletins/<channel>/.
         ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
         _gp    = geo_district_prefix(channel_name)
         s3_key = (f"{_gp}/notebooklm_processed/nlm_{kind}_{ts}.mp4" if _gp
                   else f"bulletins/{channel_name}/nlm_{kind}_{ts}.mp4")
-        _s3_client_main().upload_file(str(video_path), S3_BUCKET_MAIN, s3_key)
-        region    = os.getenv("AWS_REGION", "ap-south-2")
-        video_url = f"https://{S3_BUCKET_MAIN}.s3.{region}.amazonaws.com/{s3_key}"
-
-        # 2. Title (channel telugu + kind) + location_id
-        ckey    = channel_name.lower()
-        loc_te  = LOCATION_TELUGU_MAP.get(ckey, channel_name)
-        loc_id  = LOCATION_MAP.get(ckey, 0)
-        kind_te = _PROGRAM_KIND_TE.get(kind, kind)
-        now_t   = datetime.now().strftime('%I:%M %p').lstrip('0')
-        title   = f"{loc_te} {kind_te} | 🕒 {now_t}"
-
-        payload = {
-            "title":          title,
-            "content":        f"NotebookLM {kind} bulletin",
-            "priority_level": "low",
-            "expiry_time":    None,
-            "location_id":    int(loc_id) if loc_id else 0,
-            "image_url":      None,
-            "audio_url":      None,
-            "video_url":      video_url,
-        }
-        r = requests.post("https://localaitv.com/api/bulletins", json=payload,
-                          headers={"Authorization": f"Bearer {token}",
-                                   "Content-Type": "application/json"}, timeout=20)
-        if r.status_code in (200, 201):
-            debug(f"[{channel_name}/{kind}] ✅ sent to API: {r.json().get('id','?')} | {title}")
-            marker.write_text(video_url)        # is build ko 'sent' mark karo
-        else:
-            debug(f"[{channel_name}/{kind}] ⚠️ Bulletin API {r.status_code}: {r.text[:140]}")
+        _s3_client_main().upload_file(str(video_path), S3_BUCKET_MAIN, s3_key,
+                                      ExtraArgs={'ContentType': 'video/mp4'})
+        marker.write_text(s3_key)        # is build ko 'uploaded' mark karo (re-upload avoid)
+        debug(f"[{channel_name}/{kind}] ✅ processed bulletin S3 uploaded (PATH 2): {s3_key}")
     except Exception as e:
-        debug(f"[{channel_name}/{kind}] API send error: {e}")
+        debug(f"[{channel_name}/{kind}] program upload error: {e}")
 
 
 _train_rotation_idx = 0

@@ -2351,7 +2351,9 @@ def notebooklm_list():
                 if not o['Key'].endswith('.mp4') or o['Size'] <= 0:
                     continue
                 url = cl.generate_presigned_url(
-                    'get_object', Params={'Bucket': bkt, 'Key': o['Key']}, ExpiresIn=3600)
+                    'get_object',
+                    Params={'Bucket': bkt, 'Key': o['Key'],
+                            'ResponseContentType': 'video/mp4'}, ExpiresIn=3600)
                 items.append({
                     'scope': scope, 'state': st, 'district': d, 'kind': k,
                     'filename': o['Key'].split('/')[-1], 'key': o['Key'],
@@ -2415,7 +2417,9 @@ def notebooklm_processed_bulletins():
                     if kind_f and kind != kind_f:
                         continue
                     url = cl.generate_presigned_url(
-                        'get_object', Params={'Bucket': bkt, 'Key': o['Key']}, ExpiresIn=3600)
+                        'get_object',
+                        Params={'Bucket': bkt, 'Key': o['Key'],
+                                'ResponseContentType': 'video/mp4'}, ExpiresIn=3600)
                     items.append({
                         'channel': ch, 'location_id': int(loc_id) if loc_id else 0,
                         'kind': kind, 'filename': fn, 'key': o['Key'],
