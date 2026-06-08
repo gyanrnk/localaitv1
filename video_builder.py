@@ -3065,11 +3065,16 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
  
             tickered_path = final_path.replace('.mp4', '_tickered.mp4')
  
+            # location_id (this channel's) so the ticker's headline fallback also
+            # filters per-channel when ticker_text is empty.
+            _ticker_loc_id = next((it.get('location_id') for it in items
+                                   if it.get('type') == 'news' and it.get('location_id') is not None), None)
             if add_ticker_overlay(staging_path, tickered_path,
                                 filler_start=filler_start_time,
                                 skip_ranges=injection_skip_ranges if injection_skip_ranges else None,
                                 ticker_text=ticker_text,
-                                channel_name=channel_name):
+                                channel_name=channel_name,
+                                location_id=_ticker_loc_id):
                 # Ticker done → atomic rename to final name
                 import time as _t2
                 for _ta in range(6):
