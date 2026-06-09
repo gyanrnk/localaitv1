@@ -89,6 +89,36 @@ def geo_asset(geo_key: str, local_fallback: str = None,
     return local_fallback
 
 
+def geo_ads_files(channel_name: str):
+    """Channel ke geo ads-text (.txt) — geo/states/<state>/districts/<ch>/ads-text/* —
+    local cache dir me download karke list[str] (local paths) return karo. Miss/error pe
+    [] (caller local assets/ads par fallback kare). Cache outputs/ me (persistent)."""
+    try:
+        from config import geo_district_prefix
+        gp = geo_district_prefix(channel_name)
+        bkt = _bucket()
+        if not gp or not bkt:
+            return []
+        cl  = _get_client()
+        key = channel_name.lower().replace(' ', '_').replace('-', '_')
+        cdir = os.path.join(_GEO_ASSET_CACHE_DIR, "ads", key)
+        os.makedirs(cdir, exist_ok=True)
+        out = []
+        for o in cl.list_objects_v2(Bucket=bkt, Prefix=f"{gp}/ads-text/").get('Contents', []):
+            if not o['Key'].endswith('.txt') or o['Size'] <= 0:
+                continue
+            local = os.path.join(cdir, o['Key'].split('/')[-1])
+            s3_mtime = o['LastModified'].timestamp()
+            if not (os.path.exists(local) and os.path.getsize(local) > 0
+                    and os.path.getmtime(local) >= s3_mtime):
+                cl.download_file(bkt, o['Key'], local)
+            if os.path.exists(local) and os.path.getsize(local) > 0:
+                out.append(local)
+        return out
+    except Exception:
+        return []
+
+
 # ── Core operations ────────────────────────────────────────────────────────────
 
 def _log(msg: str):

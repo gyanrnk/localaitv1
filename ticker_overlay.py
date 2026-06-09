@@ -216,12 +216,23 @@ def _load_ad_texts(channel_name: str = '') -> str:
     # so existing single-folder setups keep working unchanged.
     files = []
     if channel_name:
-        channel_key = channel_name.lower().replace(' ', '_').replace('-', '_')
-        ch_dir = os.path.join(ADS_FOLDER_PATH, channel_key)
-        if os.path.isdir(ch_dir):
-            files = sorted(glob.glob(os.path.join(ch_dir, '*.txt')))
-            if files:
-                print(f"  ✅ [TICKER] per-channel ads: {channel_key}/ ({len(files)} file(s))")
+        # GEO-FIRST: geo/states/<state>/districts/<ch>/ads-text/*.txt (download+cache),
+        # fallback local assets/ads/<channel>/, fir global assets/ads/.
+        try:
+            import s3_storage as _s3
+            geo_files = _s3.geo_ads_files(channel_name)
+            if geo_files:
+                files = sorted(geo_files)
+                print(f"  ✅ [TICKER] geo ads: {channel_name} ({len(files)} file(s))")
+        except Exception:
+            pass
+        if not files:
+            channel_key = channel_name.lower().replace(' ', '_').replace('-', '_')
+            ch_dir = os.path.join(ADS_FOLDER_PATH, channel_key)
+            if os.path.isdir(ch_dir):
+                files = sorted(glob.glob(os.path.join(ch_dir, '*.txt')))
+                if files:
+                    print(f"  ✅ [TICKER] per-channel ads (local): {channel_key}/ ({len(files)} file(s))")
     if not files:
         files = sorted(glob.glob(os.path.join(ADS_FOLDER_PATH, '*.txt')))
     if not files:
