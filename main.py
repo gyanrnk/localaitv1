@@ -711,7 +711,10 @@ class NewsBot:
             # clip (room = 45 − narration) ke liye jagah bache — _clip_half add karta hai.
             target_words = round(22 * WORDS_PER_SECOND_TELUGU)   # ~48 words (~22s)
         else:
-            _per_item_sec = (300 - 20) / 5
+            # Image items have NO clip to absorb the 45s item cap → cap the SCRIPT
+            # itself at ~43s-worth so audio stays <=45s at NORMAL speed (no trim/cut/speed-up).
+            IMAGE_SCRIPT_MAX_SEC = 43
+            _per_item_sec = min((300 - 20) / 5, IMAGE_SCRIPT_MAX_SEC)
             target_words  = max(30, int(_per_item_sec * WORDS_PER_SECOND_TELUGU))
         # ── Best clip selection (Option B: cross-video) ───────────────────────
         if local_videos:
@@ -1126,6 +1129,11 @@ class NewsBot:
         # ─── Target words calculation ─────────────────────────────────────────
         from config import WORDS_PER_SECOND_TELUGU
         _per_item_sec = (300 - 20) / 5
+        # Image items have NO clip to absorb the 45s item cap → cap the SCRIPT itself
+        # at ~43s-worth so audio stays <=45s at NORMAL speed (no trim/cut/speed-up).
+        IMAGE_SCRIPT_MAX_SEC = 43
+        if media_type != 'video':
+            _per_item_sec = min(_per_item_sec, IMAGE_SCRIPT_MAX_SEC)
         _clip_reserve = 20 if media_type == 'video' else 0
         target_words  = max(30, int((_per_item_sec - _clip_reserve) * WORDS_PER_SECOND_TELUGU))
         print(f"[DEBUG] target_words={target_words} | media_type={media_type}")
