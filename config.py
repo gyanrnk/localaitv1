@@ -48,9 +48,18 @@ def get_channel_intro_path(channel_name: str, base_dir: str = None) -> str:
     _base = base_dir or BASE_DIR
     channel_key = channel_name.lower().replace(' ', '_').replace('-', '_')
     specific = os.path.join(_base, 'assets', f'intro_{channel_key}.mp4')
-    if os.path.exists(specific):
-        return specific
-    return os.path.join(_base, 'assets', 'intro4.mp4')
+    local_fb = specific if os.path.exists(specific) else os.path.join(_base, 'assets', 'intro4.mp4')
+    # GEO-FIRST: geo/states/<state>/districts/<ch>/intro/intro.mp4 (replaceable bina redeploy),
+    # geo na mile to local fallback (crash-proof).
+    gp = geo_district_prefix(channel_name)
+    if gp:
+        try:
+            import s3_storage as _s3
+            return _s3.geo_asset(f"{gp}/intro/intro.mp4", local_fallback=local_fb,
+                                 cache_name=f"geo_intro_{channel_key}.mp4", min_size=100_000)
+        except Exception:
+            pass
+    return local_fb
 
 
 def get_channel_logo_path(channel_name: str, base_dir: str = None) -> str:
@@ -65,11 +74,26 @@ def get_channel_logo_path(channel_name: str, base_dir: str = None) -> str:
     """
     _base = base_dir or BASE_DIR
     channel_key = channel_name.lower().replace(' ', '_').replace('-', '_')
+    local_fb = None
     for ext in ('.gif', '.mov', '.mp4'):
-        specific = os.path.join(_base, 'assets', f'logo_{channel_key}{ext}')
-        if os.path.exists(specific):
-            return specific
-    return os.path.join(_base, 'assets', 'logo3.mov')
+        sp = os.path.join(_base, 'assets', f'logo_{channel_key}{ext}')
+        if os.path.exists(sp):
+            local_fb = sp; break
+    if not local_fb:
+        local_fb = os.path.join(_base, 'assets', 'logo3.mov')
+    # GEO-FIRST: geo/states/<state>/districts/<ch>/logo/logo.{gif|mov|mp4}, fallback local.
+    gp = geo_district_prefix(channel_name)
+    if gp:
+        try:
+            import s3_storage as _s3
+            for ext in ('.gif', '.mov', '.mp4'):
+                r = _s3.geo_asset(f"{gp}/logo/logo{ext}", local_fallback=None,
+                                  cache_name=f"geo_logo_{channel_key}{ext}", min_size=5_000)
+                if r:
+                    return r
+        except Exception:
+            pass
+    return local_fb
 
 
 def get_channel_cap1_path(channel_name: str, base_dir: str = None) -> str:
@@ -86,9 +110,17 @@ def get_channel_cap1_path(channel_name: str, base_dir: str = None) -> str:
     _base = base_dir or BASE_DIR
     channel_key = channel_name.lower().replace(' ', '_').replace('-', '_')
     specific = os.path.join(_base, 'assets', f'cap1_{channel_key}.mp4')
-    if os.path.exists(specific):
-        return specific
-    return os.path.join(_base, 'assets', 'cap1.mp4')
+    local_fb = specific if os.path.exists(specific) else os.path.join(_base, 'assets', 'cap1.mp4')
+    # GEO-FIRST: geo/states/<state>/districts/<ch>/caps/cap1.mp4, fallback local.
+    gp = geo_district_prefix(channel_name)
+    if gp:
+        try:
+            import s3_storage as _s3
+            return _s3.geo_asset(f"{gp}/caps/cap1.mp4", local_fallback=local_fb,
+                                 cache_name=f"geo_cap1_{channel_key}.mp4", min_size=5_000)
+        except Exception:
+            pass
+    return local_fb
 
 
 def get_anchor_clip(base_dir: str = None) -> str:

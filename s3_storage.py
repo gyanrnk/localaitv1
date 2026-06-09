@@ -57,6 +57,38 @@ def _bucket() -> str:
     return os.getenv('S3_BUCKET_NAME', '')
 
 
+# ── Geo-first static asset loader ───────────────────────────────────────────────
+_GEO_ASSET_CACHE_DIR = "outputs/geo_asset_cache"  # under /app/outputs volume → survives deploys
+
+def geo_asset(geo_key: str, local_fallback: str = None,
+              cache_name: str = None, min_size: int = 10_000):
+    """Geo-FIRST asset: agar geo_key S3 me hai to download+cache (mtime-fresh) karke
+    LOCAL cached path (str) return karo; warna (miss/error) local_fallback return karo.
+    Kabhi raise nahi karta — fallback guaranteed (build crash-proof). Cache outputs/ me
+    (persistent volume) → har deploy pe re-download nahi.
+    """
+    try:
+        if not geo_key:
+            return local_fallback
+        bkt = _bucket()
+        if not bkt:
+            return local_fallback
+        os.makedirs(_GEO_ASSET_CACHE_DIR, exist_ok=True)
+        local = os.path.join(_GEO_ASSET_CACHE_DIR, cache_name or geo_key.replace('/', '_'))
+        cl   = _get_client()
+        head = cl.head_object(Bucket=bkt, Key=geo_key)   # missing → raises → fallback
+        s3_mtime = head['LastModified'].timestamp()
+        fresh = (os.path.exists(local) and os.path.getsize(local) >= min_size
+                 and os.path.getmtime(local) >= s3_mtime)
+        if not fresh:
+            cl.download_file(bkt, geo_key, local)
+        if os.path.exists(local) and os.path.getsize(local) >= min_size:
+            return local
+    except Exception:
+        pass
+    return local_fallback
+
+
 # ── Core operations ────────────────────────────────────────────────────────────
 
 def _log(msg: str):
