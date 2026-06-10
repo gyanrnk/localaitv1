@@ -1391,19 +1391,89 @@ def _get_filler_path(channel_name, global_fallback=True):
     return FILLER_FILE if FILLER_FILE.exists() else None
 
 
+def _same_state_latest_bulletins(channel_name, max_files=MIN_BULLETINS):
+    """SAME-STATE sibling districts ke latest rendered bulletins (newest-first).
+    Location-wise fallback ke liye — wrong-state ka content kabhi nahi aata.
+    Crash-proof: kisi bhi error pe [] (caller agle tier pe chala jaata hai)."""
+    try:
+        from config import channel_state
+        st = channel_state(channel_name)
+        if not st:
+            return []
+        cands = []
+        for c in CHANNEL_DEFS:
+            nm = c["name"]
+            if nm.lower() == str(channel_name).strip().lower():
+                continue
+            if channel_state(nm) != st:
+                continue
+            try:
+                cands += get_all_bulletins(_wdir(nm))
+            except Exception:
+                continue
+        cands.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        return cands[:max_files]
+    except Exception:
+        return []
+
+
+def _location_fallback_chain(channel_name):
+    """Channel ke paas APNA fresh rendered bulletin nahi (render starve — e.g. Kakinada)
+    → location-wise LATEST content stream karo, most-local first:
+      1. apna notebooklm program bulletin (local → district)   [same district]
+      2. same-state sibling districts ke latest rendered bulletins
+      3. state notebooklm → national notebooklm                 [fan-out content]
+    Har tier apne try/except me — fail to agla tier. Sab fail → [] return, caller
+    existing filler tail pe girta hai (stream KABHI nahi tootta)."""
+    for kind in ("local", "district"):
+        try:
+            p = build_program_bulletin(channel_name, kind)
+            if p and _is_valid_mp4(Path(p)):
+                debug(f"[{channel_name}] 📍 location-fallback: own notebooklm ({kind}): {Path(p).name}")
+                return [Path(p)]
+        except Exception as e:
+            debug(f"[{channel_name}] location-fallback {kind} failed: {e}")
+    try:
+        sibs = _same_state_latest_bulletins(channel_name)
+        if sibs:
+            debug(f"[{channel_name}] 📍 location-fallback: same-state latest x{len(sibs)}: {sibs[0].name}")
+            return sibs
+    except Exception as e:
+        debug(f"[{channel_name}] location-fallback same-state failed: {e}")
+    for kind in ("state", "national"):
+        try:
+            p = build_program_bulletin(channel_name, kind)
+            if p and _is_valid_mp4(Path(p)):
+                debug(f"[{channel_name}] 📍 location-fallback: {kind} notebooklm: {Path(p).name}")
+                return [Path(p)]
+        except Exception as e:
+            debug(f"[{channel_name}] location-fallback {kind} failed: {e}")
+    return []
+
+
 def _with_fallback(folder, channel_name):
     primary = get_all_bulletins(folder)
     if len(primary) >= MIN_BULLETINS:
         return primary
-    # Supplement with other channels' bulletins if we have some but not enough
+    # Kam bulletins (1-4): SAME-STATE siblings se top-up (location-relevant).
+    # (Pehle get_all_bulletins(_BASE) tha — _BASE me channel-folders hain, bul_* nahi,
+    # to wo hamesha [] deta tha = dead code; ab same-state supplement sach me kaam karta.)
     if primary:
-        fallback = get_all_bulletins(_BASE)
+        fallback = []
+        if os.getenv("STREAM_LOCATION_FALLBACK", "1") == "1":
+            fallback = _same_state_latest_bulletins(channel_name)
         seen, merged = set(), []
         for f in primary + fallback:
             if str(f) not in seen:
                 seen.add(str(f)); merged.append(f)
         if merged:
             return merged
+    # ZERO apna rendered bulletin (render starve) → location-wise latest content
+    # (own notebooklm → same-state latest → state → national). Fail → filler tail.
+    if os.getenv("STREAM_LOCATION_FALLBACK", "1") == "1":
+        chain = _location_fallback_chain(channel_name)
+        if chain:
+            return chain
     # No content at all — per-location GEO filler PEHLE (confirmed correct per-channel:
     # "You Are Watching <Channel> TV"). Ye assets/intro_* (jo Kurnool-branded nikle) +
     # global filler se pehle hai, taaki har channel apna sahi identifier dikhaye.
