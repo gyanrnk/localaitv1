@@ -2013,11 +2013,12 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
     old_items    = [x for x in valid_items if x.get('used_count', 0) > 0]
 
     # ── Anti-repeat gate: minimum FRESH (unaired) news chahiye bulletin trigger ─
-    # Agar itni nayi news nahi aayi, to naya bulletin NAHI banate — purana
-    # bulletin live chalta rehta hai. Isse same purani news baar-baar repeat nahi
-    # hoti. Trigger hone par: 3+ fresh + baaki already-processed (old) milake ek
-    # pura bulletin (old sirf duration fill karne ko). Tunable via MIN_FRESH_ITEMS.
-    MIN_FRESH_ITEMS = int(os.getenv('MIN_FRESH_ITEMS', '3'))
+    # Agar koi nayi news nahi aayi, to naya bulletin NAHI banate — purana
+    # bulletin live chalta rehta hai. Trigger hone par: 1+ fresh item kaafi hai —
+    # baaki budget already-processed (old) items backfill karte hain, plus 1-1
+    # location-wise whoiswho/publicvoice inject hoke ~10-min bulletin ban jaata.
+    # Tunable via MIN_FRESH_ITEMS.
+    MIN_FRESH_ITEMS = int(os.getenv('MIN_FRESH_ITEMS', '1'))
     if len(unused_items) < MIN_FRESH_ITEMS:
         print(f"⏭️ Only {len(unused_items)} fresh item(s) "
               f"(< {MIN_FRESH_ITEMS} required) — skipping build (no repeat). "
