@@ -2458,7 +2458,16 @@ def notebooklm_processed_bulletins():
                     })
             except Exception as e:
                 logger.warning(f"[notebooklm bulletins] {ch} {pfx}: {e}")
-    items.sort(key=lambda x: x['lastModified'], reverse=True)
+    # DEDUP: har (channel, kind) ka sirf LATEST rakho. geo + legacy bulletins/ + intra-geo
+    # purane nlm_* naam — sab same logical bulletin ke duplicate the (UI me 174x tak aata tha).
+    # latest-per-(channel,kind) = geo file jeetta (uska LastModified naya); fan-out intact
+    # (har channel ko apna local/district/state/national milta hai).
+    _latest = {}
+    for _it in items:
+        _k = (_it['channel'], _it['kind'])
+        if _k not in _latest or _it['lastModified'] > _latest[_k]['lastModified']:
+            _latest[_k] = _it
+    items = sorted(_latest.values(), key=lambda x: x['lastModified'], reverse=True)
     return jsonify({'status': 'ok', 'count': len(items), 'items': items}), 200
 
 
