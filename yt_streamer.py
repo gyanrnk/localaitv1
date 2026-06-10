@@ -104,7 +104,15 @@ FILLER_FILE = Path(os.getenv("FILLER_FILE", "assets/filler.mp4"))
 _SCRIPT_DIR = Path(__file__).parent
 
 def _get_intro_path(channel_name: str) -> Path | None:
-    """Return channel-specific intro, falling back to intro4.mp4."""
+    """Channel intro — GEO-FIRST via config.get_channel_intro_path
+    (geo/.../districts/<ch>/intro/intro.mp4, fallback assets/intro_<ch>.mp4 → intro4.mp4)."""
+    try:
+        from config import get_channel_intro_path
+        p = get_channel_intro_path(channel_name, str(_SCRIPT_DIR))
+        if p and Path(p).exists():
+            return Path(p)
+    except Exception:
+        pass
     key = channel_name.lower().replace(' ', '_').replace('-', '_')
     specific = _SCRIPT_DIR / 'assets' / f'intro_{key}.mp4'
     if specific.exists():
