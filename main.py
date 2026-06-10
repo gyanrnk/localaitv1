@@ -712,8 +712,9 @@ class NewsBot:
             target_words = round(22 * WORDS_PER_SECOND_TELUGU)   # ~48 words (~22s)
         else:
             # Image items have NO clip to absorb the 45s item cap → cap the SCRIPT
-            # itself at ~43s-worth so audio stays <=45s at NORMAL speed (no trim/cut/speed-up).
-            IMAGE_SCRIPT_MAX_SEC = 43
+            # itself at ~32s-worth so the spoken narration is 30-35s at NORMAL speed
+            # (not 45; no trim/cut/speed-up).
+            IMAGE_SCRIPT_MAX_SEC = 32
             _per_item_sec = min((300 - 20) / 5, IMAGE_SCRIPT_MAX_SEC)
             target_words  = max(30, int(_per_item_sec * WORDS_PER_SECOND_TELUGU))
         # ── Best clip selection (Option B: cross-video) ───────────────────────
@@ -1130,8 +1131,9 @@ class NewsBot:
         from config import WORDS_PER_SECOND_TELUGU
         _per_item_sec = (300 - 20) / 5
         # Image items have NO clip to absorb the 45s item cap → cap the SCRIPT itself
-        # at ~43s-worth so audio stays <=45s at NORMAL speed (no trim/cut/speed-up).
-        IMAGE_SCRIPT_MAX_SEC = 43
+        # at ~32s-worth so the spoken narration is 30-35s at NORMAL speed
+        # (not 45; no trim/cut/speed-up).
+        IMAGE_SCRIPT_MAX_SEC = 32
         if media_type != 'video':
             _per_item_sec = min(_per_item_sec, IMAGE_SCRIPT_MAX_SEC)
         _clip_reserve = 20 if media_type == 'video' else 0
