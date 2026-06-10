@@ -1000,30 +1000,25 @@ def _run_planner():
             t_watch_start = time()
             logger.info(f"⏱️  [WATCHER] Polling every {POLL_INTERVAL}s | timeout={MAX_WAIT_SEC}s | expecting {len(expected_ranks)} items")
 
+            # last-progress clock: timeout ab TOTAL time pe nahi, NO-PROGRESS pe hai.
+            # Render slow hone par (25-30+ min) total-timer 9/11 pe watcher maar deta
+            # tha aur bache items ke incidents (citizen-feed shorts) SILENTLY DROP ho
+            # jaate the. Jab tak naye item-markers aate rehte hain, watcher zinda
+            # rehta hai. Infinite-hang nahi ho sakta: build subprocess khud
+            # BUILD_TIMEOUT(3600s) se bounded hai → _build_done set hote hi exit.
+            _progress_t = time()
             while len(processed_ranks) < len(expected_ranks):
 
-                # Build thread crash check
-                # if not build_thread.is_alive() and not _build_result['video_path']:
-                #     logger.error("❌ [WATCHER] Build thread died without producing video — stopping watcher")
-                #     break
+                # Build-finish snapshot SCAN SE PEHLE — set ho to is iteration me ek
+                # FINAL sweep chalega (last-moment markers drop na ho), phir exit.
+                _build_finished = _build_done.is_set()
 
-                # if _build_done.is_set() and not _build_result['video_path']:
-                #     logger.error("❌ [WATCHER] Build thread finished without producing video — stopping watcher")
-                #     break
-
-                if _build_done.is_set():
-                    if _build_result['video_path']:
-                        logger.info("✅ [WATCHER] Build thread completed successfully")
-                        break
-                    elif _build_result.get('error'):
-                        logger.error(f"❌ [WATCHER] Build thread errored: {_build_result['error']}")
-                        break
-
-                # Timeout check
-                elapsed_watch = time() - t_watch_start
-                if elapsed_watch > MAX_WAIT_SEC:
-                    logger.error(f"❌ [WATCHER] Timeout after {MAX_WAIT_SEC}s — processed {len(processed_ranks)}/{len(expected_ranks)}")
+                # Timeout: MAX_WAIT_SEC tak KOI naya item process nahi hua (true stall)
+                if not _build_finished and time() - _progress_t > MAX_WAIT_SEC:
+                    logger.error(f"❌ [WATCHER] No progress for {MAX_WAIT_SEC}s — processed {len(processed_ranks)}/{len(expected_ranks)}")
                     break
+
+                _before_scan = len(processed_ranks)
 
                 # Scan for new item-ready markers
                 if os.path.exists(segments_dir):
@@ -1143,6 +1138,18 @@ def _run_planner():
                             logger.warning(f"  ⚠️ [rank={rank}] concat FAILED after {concat_elapsed}s")
 
                         processed_ranks.add(rank)
+
+                if len(processed_ranks) > _before_scan:
+                    _progress_t = time()          # naya item aaya — stall clock reset
+
+                if _build_finished:
+                    # build khatam + ek final sweep ho chuka — ab exit (pehle yahan
+                    # turant break tha jo aakhri markers chhod deta tha)
+                    if _build_result.get('error'):
+                        logger.error(f"❌ [WATCHER] Build thread errored: {_build_result['error']}")
+                    else:
+                        logger.info("✅ [WATCHER] Build thread completed — final marker sweep done")
+                    break
 
                 from time import sleep as _sleep
                 _sleep(POLL_INTERVAL)
