@@ -5,6 +5,7 @@ Sirf boto3 + random logic — video_builder.py ko clean rakhne ke liye alag file
 import json
 import os
 import random
+import re
 import subprocess
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -16,6 +17,8 @@ from config import (
     S3_BULLETIN_PREFIX,
     S3_REGION,
     S3_INJECT_LOCAL_DIR,
+    LOCATION_ID_TO_CHANNEL,
+    CHANNEL_STATE,
 )
 
 
@@ -56,6 +59,131 @@ def _s3_client_m():
                     config=_BotoConfig(max_pool_connections=25),
                 )
     return _s3_singleton_m
+
+
+# ── Location-aware tiered fetch helpers ─────────────────────────────────────
+# channel(lower) -> [backend ids]; LOCATION_ID_TO_CHANNEL se bana (COMPLETE 9-id map,
+# 209 Kakinada / 335 Tirupati included) — jaan-bujhke channel_backend_ids NAHI use kiya:
+# wo CLASSIFIED_LOCATION_MAP par hai jisme 209/335 missing hain, aur wo
+# webhook_server/yt_streamer ke saath shared hai (unka behavior nahi chhedna).
+_CHANNEL_TO_BACKEND_IDS = {}
+for _bid, _ch in LOCATION_ID_TO_CHANNEL.items():
+    _CHANNEL_TO_BACKEND_IDS.setdefault(_ch.strip().lower(), []).append(_bid)
+
+
+def _ids_for_channel(channel_name):
+    if not channel_name:
+        return []
+    return _CHANNEL_TO_BACKEND_IDS.get(str(channel_name).strip().lower(), [])
+
+
+def _sibling_ids(channel_name):
+    """Same-state backend ids EXCLUDING the channel's own id(s)."""
+    st = CHANNEL_STATE.get(str(channel_name or '').strip().lower())
+    if not st:
+        return []
+    own = set(_ids_for_channel(channel_name))
+    return [bid for bid, ch in LOCATION_ID_TO_CHANNEL.items()
+            if bid not in own and CHANNEL_STATE.get(ch.strip().lower()) == st]
+
+
+def _list_mp4_keys(prefix):
+    """Paginated (key, LastModified) list under prefix. [] on ANY error.
+    Paginator (bare list_objects_v2 nahi) — whoiswho/outputs/ ~351 keys pe hai
+    aur ~35-40/day badh raha; 1000-key page cap jaldi silently truncate karta."""
+    try:
+        s3 = _s3_client_m()
+        out = []
+        for page in s3.get_paginator('list_objects_v2').paginate(
+                Bucket=S3_BUCKET_NAME_M, Prefix=prefix):
+            out += [(o['Key'], o.get('LastModified'))
+                    for o in page.get('Contents', [])
+                    if o['Key'].endswith('.mp4') and o['Size'] > 0]
+        return out
+    except Exception as e:
+        print(f"  [S3-INJECT] ❌ list error ({prefix}): {e}")
+        return []
+
+
+def _latest_date_subset(keys, base_prefix):
+    """Ek id ke keys ko uske NEWEST date folder tak filter karo. Key shape:
+    <base_prefix><id>/<YYYY-MM-DD>/<file>.mp4 — ISO dates lexicographic sort hote.
+    Max us id ke APNE folders par (Guntur/344 ek din peeche chalta hai — aaj ka
+    folder assume kabhi nahi). Undated keys unchanged pass-through."""
+    dated = {}
+    for k, lm in keys:
+        parts = k[len(base_prefix):].split('/')      # [id, date, file]
+        if len(parts) >= 3:
+            dated.setdefault(parts[1], []).append((k, lm))
+    if not dated:
+        return keys
+    return dated[max(dated)]
+
+
+def _cached_download(key, base_prefix, family):
+    """COLLISION-PROOF flat cache naam ke saath download:
+    <family>_<relative-key '/'->'_' > e.g. whoiswho/outputs/75/2026-06-10/bulletin_1.mp4
+    -> whoiswho_75_2026-06-10_bulletin_1.mp4. Basename collision fix (har id ke clips
+    bulletin_<n>.mp4 naam ke hain — Karimnagar ka bulletin_1 Kakinada ke liye false
+    cache-hit ho jaata). Unique naam _effective_dur/_reencode ke reenc-cache me bhi
+    sahi flow hota (wo basename se key karte). Returns local path | None; never raises."""
+    rel = key[len(base_prefix):] if key.startswith(base_prefix) else key
+    local_path = os.path.join(S3_INJECT_LOCAL_DIR,
+                              f"{family}_{rel.replace('/', '_')}")
+    if os.path.exists(local_path) and os.path.getsize(local_path) > 100_000:
+        print(f"  [{family.upper()}] ✅ Cache hit: {os.path.basename(local_path)}")
+        return local_path
+    try:
+        _s3_client_m().download_file(S3_BUCKET_NAME_M, key, local_path)
+        print(f"  [{family.upper()}] ✅ Downloaded: {os.path.basename(local_path)}")
+        return local_path
+    except Exception as e:
+        print(f"  [{family.upper()}] ❌ Download failed ({key}): {e}")
+        if os.path.exists(local_path):
+            try:
+                os.remove(local_path)
+            except OSError:
+                pass
+        return None
+
+
+def _fetch_location_clip(base_prefix, channel_name, family, quiet=False):
+    """3-tier location-aware pick. NEVER raises — koi bhi failure -> agla tier -> None.
+    TIER1: apne backend id(s), latest date folder, random within.
+    TIER2: same-state sibling ids, har id ka latest folder, union par random.
+    TIER3: global per-id pool — legacy flat keys SHAPE se excluded
+           (key <base_prefix><digits>/... match kare tabhi).
+    quiet=True 'no clip'/tier-pick prints suppress karta (public_voice me abhi
+    outputs/ content nahi — har build pe log spam nahi hona chahiye)."""
+    try:
+        per_id_re = re.compile(re.escape(base_prefix) + r'\d+/')
+        for tier, ids in (('TIER1', _ids_for_channel(channel_name)),
+                          ('TIER2', _sibling_ids(channel_name))):
+            pool = []
+            for bid in ids:
+                pool += _latest_date_subset(
+                    _list_mp4_keys(f"{base_prefix}{bid}/"), base_prefix)
+            if pool:
+                key, _lm = random.choice(pool)
+                if not quiet:
+                    print(f"  [{family.upper()}] {tier} pick ({channel_name}): {key}")
+                p = _cached_download(key, base_prefix, family)
+                if p:
+                    return p          # download fail -> agla tier try hoga
+        # TIER3 — global pool, legacy flat keys excluded
+        pool = [(k, lm) for k, lm in _list_mp4_keys(base_prefix)
+                if per_id_re.match(k)]
+        if pool:
+            key, _lm = random.choice(pool)
+            if not quiet:
+                print(f"  [{family.upper()}] TIER3 pick: {key}")
+            return _cached_download(key, base_prefix, family)
+        if not quiet:
+            print(f"  [{family.upper()}] ⚠️ No clip found")
+        return None
+    except Exception as e:
+        print(f"  [{family.upper()}] ❌ Error: {e}")
+        return None
 
 
 def list_s3_bulletins() -> list:
@@ -149,28 +277,24 @@ def fetch_random_s3_bulletin() -> Optional[str]:
     # return _reencode_for_bulletin(local_path)
     return local_path
 
-def fetch_whoiswho_bulletin() -> Optional[str]:
-    try:
-        s3  = _s3_client_m()
-        res = s3.list_objects_v2(Bucket=S3_BUCKET_NAME_M, Prefix='whoiswho/outputs/')
-        mp4_files = [obj for obj in res.get('Contents', [])
-                     if obj['Key'].endswith('.mp4') and obj['Size'] > 0]
-        if not mp4_files:
-            print("  [WHOISWHO] ⚠️ No clip found")
-            return None
+def fetch_whoiswho_bulletin(channel_name: str = None) -> Optional[str]:
+    """Location-wise whoiswho clip.
+    channel_name (e.g. 'Kakinada') ke saath: TIER1 apna district -> TIER2 same-state
+    siblings -> TIER3 global per-id pool. Bina arg: TIER1/2 skip (no ids) -> seedha
+    TIER3 — yaani SAARE per-id clips par random, legacy flat whoiswho_*.mp4 excluded.
+    Never raises; total failure pe None (build segment skip karta, bulletin banta)."""
+    return _fetch_location_clip('whoiswho/outputs/', channel_name, 'whoiswho')
 
-        # ← CHANGE: random pick instead of latest
-        chosen = random.choice(mp4_files)
-        local_path = os.path.join(S3_INJECT_LOCAL_DIR, os.path.basename(chosen['Key']))
-        if os.path.exists(local_path) and os.path.getsize(local_path) > 100_000:
-            print(f"  [WHOISWHO] ✅ Cache hit: {os.path.basename(local_path)}")
-            return local_path
-        s3.download_file(S3_BUCKET_NAME_M, chosen['Key'], local_path)
-        print(f"  [WHOISWHO] ✅ Downloaded: {os.path.basename(local_path)}")
-        return local_path
-    except (BotoCoreError, ClientError) as e:
-        print(f"  [WHOISWHO] ❌ Error: {e}")
-        return None
+
+def fetch_publicvoice_bulletin(channel_name: str = None) -> Optional[str]:
+    """Public-voice clip: public_voice/outputs/<backend_id>/<date>/*.mp4 se.
+    Wo prefix S3 par ABHI exist nahi karta — jab tak upstream render karke outputs/
+    nahi bharta, ye silently None deta hai (quiet=True: empty prefix par zero log
+    lines; empty list S3 error nahi to _list_mp4_keys bhi kuch print nahi karta).
+    Jaan-bujhke public_voice/videos/ KABHI nahi padhta — wo raw user uploads hain,
+    broadcast-ready nahi."""
+    return _fetch_location_clip('public_voice/outputs/', channel_name,
+                                'publicvoice', quiet=True)
 
 
 # def fetch_ad_clips() -> List[Optional[str]]:  # duplicate — commented out
