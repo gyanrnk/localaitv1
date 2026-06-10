@@ -93,8 +93,11 @@ TRAIN_PREFIX    = "trainroutes/outputs/"
 BIRTHDAY_PREFIX = "birthdays/outputs/"
 MARRIAGE_PREFIX = "marriages/outputs/"
 
-INJECT_CACHE_DIR = Path("s3_inject_cache")
-INJECT_CACHE_DIR.mkdir(exist_ok=True)
+# PERSISTENT volume (geo_asset_cache jaise) — /app/outputs Docker named volume me hai,
+# isliye deploy/restart pe processed (GOP-fixed/trimmed) injects survive → re-encode skip.
+# (pehle "s3_inject_cache" container ki ephemeral dir me tha → har deploy pe wipe → re-encode.)
+INJECT_CACHE_DIR = Path("outputs/s3_inject_cache")
+INJECT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 NOTEBOOKLM_CACHE_DIR = Path("outputs/notebooklm_cache")
 NOTEBOOKLM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -631,7 +634,9 @@ def _trim_to_max(path: Path, max_sec: int = INJECT_MAX_SEC) -> Path:
     if _get_video_duration(path) <= max_sec:
         return path
     trimmed = path.parent / (path.stem + f"_trim{max_sec}s.mp4")
-    if trimmed.exists() and trimmed.stat().st_size > 100_000:
+    # persistent cache: trimmed ko TABHI reuse karo jab source se naya/barabar ho (stale na de)
+    if (trimmed.exists() and trimmed.stat().st_size > 100_000
+            and trimmed.stat().st_mtime >= path.stat().st_mtime):
         return trimmed
     debug(f"Trimming {path.name} to {max_sec}s...")
     r = subprocess.run(["ffmpeg","-y","-i",str(path),"-t",str(max_sec),"-c","copy",str(trimmed)],
@@ -643,7 +648,24 @@ def _download_if_needed(s3_key: str, apply_trim: bool = False):
     local     = INJECT_CACHE_DIR / Path(s3_key).name
     gop_fixed = INJECT_CACHE_DIR / (Path(s3_key).stem + "_gop.mp4")
 
-    if not (local.exists() and local.stat().st_size > 100_000):
+    # S3 LastModified — persistent cache ki freshness gate (same-naam-naya-content => stale na ho).
+    # head fail ho to s3_mtime=None => sirf existence/size pe cache (graceful, purane jaisा).
+    s3_mtime = None
+    try:
+        s3_mtime = _s3_client().head_object(Bucket=S3_BUCKET, Key=s3_key)['LastModified'].timestamp()
+    except (BotoCoreError, ClientError):
+        pass
+
+    def _fresh(f):
+        return (f.exists() and f.stat().st_size > 100_000
+                and (s3_mtime is None or f.stat().st_mtime >= s3_mtime))
+
+    # already-processed GOP cache fresh hai → re-encode SKIP (persistence ka asli faayda)
+    if _fresh(gop_fixed):
+        return _trim_to_max(gop_fixed) if apply_trim else gop_fixed
+
+    # raw local stale/missing → re-download (+ stale GOP hatao; neeche fir se GOP banega)
+    if not _fresh(local):
         try:
             _s3_client().download_file(S3_BUCKET, s3_key, str(local))
             debug(f"Downloaded: {local.name}")
@@ -655,9 +677,6 @@ def _download_if_needed(s3_key: str, apply_trim: bool = False):
                 if f.exists() and f.stat().st_size > 100_000:
                     return _trim_to_max(f) if apply_trim else f
             return None
-    else:
-        if gop_fixed.exists() and gop_fixed.stat().st_size > 100_000:
-            return _trim_to_max(gop_fixed) if apply_trim else gop_fixed
 
     debug(f"GOP fix: {local.name}...")
     r = subprocess.run([
