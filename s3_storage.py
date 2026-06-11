@@ -57,6 +57,9 @@ def _bucket() -> str:
     return os.getenv('S3_BUCKET_NAME', '')
 
 
+_CDN_BASE_URL = os.getenv('CDN_BASE_URL', '').rstrip('/')
+
+
 # ── Geo-first static asset loader ───────────────────────────────────────────────
 _GEO_ASSET_CACHE_DIR = "outputs/geo_asset_cache"  # under /app/outputs volume → survives deploys
 
@@ -235,7 +238,10 @@ def delete_file(s3_key: str, bucket: str = None) -> bool:
 # ── Async upload (fire-and-forget background thread) ─────────────────────────
 
 def public_url(s3_key: str, bucket: str = None) -> str:
-    """Return the public HTTPS URL for an S3 key."""
+    """Return the public HTTPS URL for an S3 key.
+    CDN_BASE_URL set => CDN URL (no S3 direct); unset => original S3 URL."""
+    if _CDN_BASE_URL:
+        return f"{_CDN_BASE_URL}/{s3_key}"
     bkt    = bucket or _bucket()
     region = os.getenv('AWS_REGION', 'ap-south-2')
     return f"https://{bkt}.s3.{region}.amazonaws.com/{s3_key}"
