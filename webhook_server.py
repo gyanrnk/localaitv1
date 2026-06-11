@@ -2275,6 +2275,9 @@ def _process_batch_background(batch_items: list, batch_id: str):
 
 
 # ── NotebookLM bulletins (geo/ S3) — admin upload + UI list ─────────────────
+CDN_BASE_URL = os.getenv('CDN_BASE_URL', '').rstrip('/')
+
+
 def _check_admin_token() -> bool:
     """Bearer token must match BULLETIN_API_TOKEN or LOCALAITV_API_TOKEN."""
     auth = request.headers.get('Authorization', '')
@@ -2282,6 +2285,21 @@ def _check_admin_token() -> bool:
     valid = {os.getenv('BULLETIN_API_TOKEN', ''), os.getenv('LOCALAITV_API_TOKEN', '')}
     valid.discard('')
     return bool(tok) and tok in valid
+
+
+def _video_url(key: str, last_modified) -> str:
+    """Return CDN URL when CDN_BASE_URL is set, else presigned S3 GET (1h).
+    CDN_BASE_URL empty (default) = exact current behavior, no config needed."""
+    if CDN_BASE_URL:
+        import math
+        ts = math.floor(last_modified.timestamp()) if hasattr(last_modified, 'timestamp') else 0
+        return f"{CDN_BASE_URL}/{key}?v={ts}"
+    import s3_storage as _s3
+    cl, bkt = _s3._get_client(), _s3._bucket()
+    return cl.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': bkt, 'Key': key, 'ResponseContentType': 'video/mp4'},
+        ExpiresIn=3600)
 
 
 @app.route('/api/notebooklm/presign', methods=['POST'])
@@ -2357,10 +2375,7 @@ def notebooklm_list():
             for o in res.get('Contents', []):
                 if not o['Key'].endswith('.mp4') or o['Size'] <= 0:
                     continue
-                url = cl.generate_presigned_url(
-                    'get_object',
-                    Params={'Bucket': bkt, 'Key': o['Key'],
-                            'ResponseContentType': 'video/mp4'}, ExpiresIn=3600)
+                url = _video_url(o['Key'], o['LastModified'])
                 items.append({
                     'scope': scope, 'state': st, 'district': d, 'kind': k,
                     'filename': o['Key'].split('/')[-1], 'key': o['Key'],
@@ -2450,10 +2465,7 @@ def notebooklm_processed_bulletins():
                         continue
                     if kind_f and kind != kind_f:
                         continue
-                    url = cl.generate_presigned_url(
-                        'get_object',
-                        Params={'Bucket': bkt, 'Key': o['Key'],
-                                'ResponseContentType': 'video/mp4'}, ExpiresIn=3600)
+                    url = _video_url(o['Key'], o['LastModified'])
                     items.append({
                         'channel': ch, 'location_id': int(loc_id) if loc_id else 0,
                         'kind': kind,
