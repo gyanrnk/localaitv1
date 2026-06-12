@@ -275,7 +275,15 @@ def _logo_is_animated(logo_path: str) -> bool:
 
 def _run(cmd: List[str], desc: str = '') -> bool:
     print(f"  🔧 {desc or ' '.join(cmd[:4])}")
-    
+
+    # Progressive playback: write moov atom at front for .mp4 outputs so the
+    # browser/CDN can start playing before the whole file downloads (less buffering).
+    # Skip for pipe/stdout outputs (not seekable) and non-mp4 outputs.
+    if 'ffmpeg' in cmd and '-movflags' not in cmd:
+        out = str(cmd[-1]) if cmd else ''
+        if out.lower().endswith('.mp4') and out not in ('-', 'pipe:', 'pipe:1'):
+            cmd[-1:-1] = ['-movflags', '+faststart']
+
     # Stream-ready: inject CBR + GOP flags if encoding (not concat/copy)
     if 'ffmpeg' in cmd and '-c:v' in cmd and 'copy' not in cmd:
         # Replace any existing -crf with CBR flags
@@ -3052,6 +3060,7 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
             'ffmpeg', '-y', '-i', final_path,
             '-c:v', 'copy', '-c:a', 'copy',
             '-video_track_timescale', '12800',
+            '-movflags', '+faststart',
             staging_path
         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
  

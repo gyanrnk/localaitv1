@@ -2013,11 +2013,12 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
     old_items    = [x for x in valid_items if x.get('used_count', 0) > 0]
 
     # ── Anti-repeat gate: minimum FRESH (unaired) news chahiye bulletin trigger ─
-    # Agar itni nayi news nahi aayi, to naya bulletin NAHI banate — purana
-    # bulletin live chalta rehta hai. Isse same purani news baar-baar repeat nahi
-    # hoti. Trigger hone par: 3+ fresh + baaki already-processed (old) milake ek
-    # pura bulletin (old sirf duration fill karne ko). Tunable via MIN_FRESH_ITEMS.
-    MIN_FRESH_ITEMS = int(os.getenv('MIN_FRESH_ITEMS', '3'))
+    # Agar koi nayi news nahi aayi, to naya bulletin NAHI banate — purana
+    # bulletin live chalta rehta hai. Trigger hone par: 1+ fresh item kaafi hai —
+    # baaki budget already-processed (old) items backfill karte hain, plus 1-1
+    # location-wise whoiswho/publicvoice inject hoke ~10-min bulletin ban jaata.
+    # Tunable via MIN_FRESH_ITEMS.
+    MIN_FRESH_ITEMS = int(os.getenv('MIN_FRESH_ITEMS', '1'))
     if len(unused_items) < MIN_FRESH_ITEMS:
         print(f"⏭️ Only {len(unused_items)} fresh item(s) "
               f"(< {MIN_FRESH_ITEMS} required) — skipping build (no repeat). "
@@ -2032,10 +2033,11 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
     intro_dur = INTRO_VIDEO_DURATION
 
     # ── Pre-fetch WhoisWho (S3) + Ad clips (S3 + local assets/ads1) ─────────
-    from s3_bulletin_fetcher import fetch_whoiswho_bulletin, fetch_ad_clips, fetch_local_ad_clips
+    from s3_bulletin_fetcher import fetch_whoiswho_bulletin, fetch_publicvoice_bulletin, fetch_ad_clips, fetch_local_ad_clips
     from config import ADS_ENABLED
 
-    _whoiswho_clip  = fetch_whoiswho_bulletin()          # S3 se 1-min clip
+    _whoiswho_clip    = fetch_whoiswho_bulletin(location_name)    # S3 se 1-min clip (location-wise 3-tier)
+    _publicvoice_clip = fetch_publicvoice_bulletin(location_name) # None jab tak upstream public_voice/outputs/ nahi bharta
 
     if ADS_ENABLED:
         _s3_ads    = fetch_ad_clips()
@@ -2077,24 +2079,28 @@ def build_bulletin(duration_minutes: int, location_id: int = None, location_name
             return _quick_dur(reenc_path)
         return _quick_dur(original_path)
 
-    _whoiswho_dur  = _effective_dur(_whoiswho_clip) if (_whoiswho_clip and os.path.exists(_whoiswho_clip)) else 0.0
+    _whoiswho_dur    = _effective_dur(_whoiswho_clip) if (_whoiswho_clip and os.path.exists(_whoiswho_clip)) else 0.0
+    _publicvoice_dur = _effective_dur(_publicvoice_clip) if (_publicvoice_clip and os.path.exists(_publicvoice_clip)) else 0.0
     _ad_durations  = [_effective_dur(ac) for ac in _ad_clips if ac and os.path.exists(ac)]
     _ad_total_dur  = sum(_ad_durations)
 
-    # ── Injections list: whoiswho pehle, phir ads ────────────────────────────
+    # ── Injections list: whoiswho + publicvoice pehle, phir ads ─────────────
     _injections = []
     if _whoiswho_clip and _whoiswho_dur > 0:
         _injections.append({'path': _whoiswho_clip, 'duration': _whoiswho_dur, 'label': 'whoiswho'})
+    if _publicvoice_clip and _publicvoice_dur > 0:
+        _injections.append({'path': _publicvoice_clip, 'duration': _publicvoice_dur, 'label': 'publicvoice'})
     for _i, (ac, ad_dur) in enumerate(zip(_ad_clips, _ad_durations)):
         if ac and ad_dur > 0:
             _injections.append({'path': ac, 'duration': ad_dur, 'label': f'ad_{_i+1}'})
 
-    # 🆕 Shuffle taaki whoiswho aur ads ka order bulletin-to-bulletin different ho
+    # 🆕 Shuffle taaki whoiswho/publicvoice aur ads ka order bulletin-to-bulletin different ho
     import random as _random
     _random.shuffle(_injections)
     # ── NEWS budget = TOTAL - injections (injections ka break NAHI hoga) ─────
-    TARGET = duration_minutes * 60 - _whoiswho_dur - _ad_total_dur - 5
+    TARGET = duration_minutes * 60 - _whoiswho_dur - _publicvoice_dur - _ad_total_dur - 5
     print(f"  [BUDGET] total={duration_minutes*60}s | whoiswho={_whoiswho_dur:.1f}s | "
+          f"publicvoice={_publicvoice_dur:.1f}s | "
           f"ads={_ad_total_dur:.1f}s ({len(_ad_clips)} clips) | "
           f"{len(_injections)} injections → news TARGET={TARGET:.1f}s")
 

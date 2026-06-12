@@ -88,7 +88,7 @@ INJECT_MAX_SEC = 5 * 60  # 5 minutes
 S3_BUCKET = os.getenv("S3_BUCKET_NAME_M", "localaitv1-689186650531-ap-south-2-an")
 S3_REGION = os.getenv("AWS_REGION_M", "ap-south-2")
 
-VEGE_PREFIX     = "vegetableprices/outputs/4/"
+VEGE_PREFIX     = "vegetableprices/outputs/"   # per-location: <id>/ flat YA <id>/<date>/ nested
 TRAIN_PREFIX    = "trainroutes/outputs/"
 BIRTHDAY_PREFIX = "birthdays/outputs/"
 MARRIAGE_PREFIX = "marriages/outputs/"
@@ -492,7 +492,7 @@ def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None
         debug(f"[{channel_name}/{kind}] program upload error: {e}")
 
 
-_train_rotation_idx = 0
+_train_rotation_idx = {}   # PER-CHANNEL rotation: channel_key(lower) -> next index
 
 # ── Fixed daily broadcast schedule (IST) ─────────────────────────────────────
 DAILY_SCHEDULE = [
@@ -645,8 +645,13 @@ def _trim_to_max(path: Path, max_sec: int = INJECT_MAX_SEC) -> Path:
 
 
 def _download_if_needed(s3_key: str, apply_trim: bool = False):
-    local     = INJECT_CACHE_DIR / Path(s3_key).name
-    gop_fixed = INJECT_CACHE_DIR / (Path(s3_key).stem + "_gop.mp4")
+    # COLLISION-PROOF cache name: full key (slashes->_), same pattern as whoiswho
+    # fix. Per-id same-basename files (305/kurnool_hyderabad_bulletin.mp4 vs
+    # Kurnool/... vs flat ...) ab alag-alag cache entries — wrong-district serve
+    # nahi hoga.
+    safe      = s3_key.replace("/", "_")
+    local     = INJECT_CACHE_DIR / safe
+    gop_fixed = INJECT_CACHE_DIR / (Path(safe).stem + "_gop.mp4")
 
     # S3 LastModified — persistent cache ki freshness gate (same-naam-naya-content => stale na ho).
     # head fail ho to s3_mtime=None => sirf existence/size pe cache (graceful, purane jaisा).
@@ -695,21 +700,74 @@ def _download_if_needed(s3_key: str, apply_trim: bool = False):
     return _trim_to_max(out) if apply_trim else out
 
 
-def fetch_latest_vege():
+def _channel_location_ids(channel_name):
+    """Own backend id(s) — config.LOCATION_ID_TO_CHANNEL inversion (COMPLETE map,
+    209/335 incl). channel_backend_ids jaan-bujhke NAHI (209/335 missing).
+    [] => caller SKIPs. Kabhi raise nahi karta."""
     try:
-        res  = _s3_client().list_objects_v2(Bucket=S3_BUCKET, Prefix=VEGE_PREFIX)
-        mp4s = [o for o in res.get("Contents", []) if o["Key"].endswith(".mp4") and o["Size"] > 0]
-        if not mp4s:
-            return None
+        from config import location_ids_for_channel
+        return location_ids_for_channel(channel_name)
+    except Exception:
+        return []
 
-        latest = max(mp4s, key=lambda o: o["LastModified"])
-        debug(f"Vege: {Path(latest['Key']).name}")
 
-        return _download_if_needed(latest["Key"], apply_trim=True)
+# Short-TTL in-process memo — crash-recovery / silent-update rebuilds 9 channelon
+# ke liye S3 list spam na karein. Slot cadence 15 min => 240s fresh enough.
+_INJECT_FETCH_TTL   = 240
+_inject_fetch_cache = {}     # (family, channel_key) -> (ts, result)
+_inject_fetch_lock  = threading.Lock()
 
-    except (BotoCoreError, ClientError) as e:
-        debug(f"Vege fetch error: {e}")
+def _ttl_memo(family, channel_name, producer, empty=None):
+    key = (family, str(channel_name or "").strip().lower())
+    with _inject_fetch_lock:
+        hit = _inject_fetch_cache.get(key)
+        if hit and (time.time() - hit[0]) < _INJECT_FETCH_TTL:
+            return hit[1]
+    try:
+        res = producer()
+    except Exception as e:          # crash-proof: fetcher fail => segment skip, stream zinda
+        debug(f"{family} fetch crashed [{channel_name}]: {e}")
+        res = empty
+    with _inject_fetch_lock:
+        _inject_fetch_cache[key] = (time.time(), res)
+    return res
+
+
+def _fetch_latest_own(prefix, channel_name, family):
+    """STRICT own-location LATEST .mp4 under <prefix><own_id>/ (paginated recursive
+    => flat '<id>/x.mp4' AUR nested '<id>/<date>/x.mp4' dono). Registry ids ke
+    bahar (orphan 20/, global/) KABHI nahi. None => segment SKIP. NO fallback."""
+    ids = _channel_location_ids(channel_name)
+    if not ids:
         return None
+    try:
+        cands = []
+        for bid in ids:
+            cands += _list_all_mp4(f"{prefix}{bid}/")
+        if not cands:
+            debug(f"{family}[{channel_name}]: no own content — skip")
+            return None
+        latest = max(cands, key=lambda o: o["LastModified"])
+        debug(f"{family}[{channel_name}]: {latest['Key']}")
+        return _download_if_needed(latest["Key"], apply_trim=True)
+    except (BotoCoreError, ClientError) as e:
+        debug(f"{family} fetch error [{channel_name}]: {e}")
+        return None
+
+
+def fetch_latest_vege(channel_name=None):
+    return _ttl_memo("vege", channel_name,
+                     lambda: _fetch_latest_own(VEGE_PREFIX, channel_name, "Vege"))
+
+
+def fetch_todays_birthday(channel_name=None):
+    return _ttl_memo("birthday", channel_name,
+                     lambda: _fetch_latest_own(BIRTHDAY_PREFIX, channel_name, "Birthday"))
+
+
+def fetch_todays_marriage(channel_name=None):
+    return _ttl_memo("marriage", channel_name,
+                     lambda: _fetch_latest_own(MARRIAGE_PREFIX, channel_name, "Marriage"))
 
 
 def _natural_sort_key(key):
@@ -717,50 +775,43 @@ def _natural_sort_key(key):
     return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", key)]
 
 
-def fetch_train_clips():
-    try:
-        res  = _s3_client().list_objects_v2(Bucket=S3_BUCKET, Prefix=TRAIN_PREFIX)
-        keys = sorted([o["Key"] for o in res.get("Contents",[])
-                       if o["Key"].endswith(".mp4") and o["Size"]>0], key=_natural_sort_key)
-        clips = [c for c in (_download_if_needed(k, apply_trim=True) for k in keys) if c]
-        debug(f"Train clips: {len(clips)}")
-        return clips
-    except (BotoCoreError, ClientError) as e:
-        debug(f"Train fetch error: {e}"); return []
+def _own_train_keys(channel_name):
+    """Own-district train keys across ALL 3 coexisting S3 layouts (mid-migration):
+      flat   trainroutes/outputs/<district>_<route>*.mp4   (district = channel lower)
+      named  trainroutes/outputs/<ChannelName>/...         (top folder, case-insensitive)
+      id     trainroutes/outputs/<location_id>/...         (numeric backend id)
+    Matching KEYS par — sirf own clips download honge. Same basename multiple
+    layouts me => newest LastModified wins (dedupe). [] => segment SKIP."""
+    ids  = set(_channel_location_ids(channel_name))
+    dist = str(channel_name or "").strip().lower()
+    if not dist or not ids:
+        return []
+    own = {}
+    for o in _list_all_mp4(TRAIN_PREFIX):
+        rel = o["Key"][len(TRAIN_PREFIX):]
+        top = rel.split("/", 1)[0]
+        mine = ((("/" in rel) and (top.lower() == dist or top in ids))
+                or (("/" not in rel) and rel.lower().startswith(dist + "_")))
+        if not mine:
+            continue
+        base = Path(o["Key"]).name.lower()
+        prev = own.get(base)
+        if prev is None or o["LastModified"] > prev["LastModified"]:
+            own[base] = o
+    return sorted((o["Key"] for o in own.values()), key=_natural_sort_key)
 
 
-def fetch_todays_birthday():
-    try:
-        res  = _s3_client().list_objects_v2(Bucket=S3_BUCKET, Prefix=BIRTHDAY_PREFIX)
-        mp4s = [o for o in res.get("Contents", []) if o["Key"].endswith(".mp4") and o["Size"] > 0]
-        if not mp4s:
-            return None
-
-        latest = max(mp4s, key=lambda o: o["LastModified"])
-        debug(f"Birthday: {Path(latest['Key']).name}")
-
-        return _download_if_needed(latest["Key"], apply_trim=True)
-
-    except (BotoCoreError, ClientError) as e:
-        debug(f"Birthday fetch error: {e}")
-        return None
-
-
-def fetch_todays_marriage():
-    try:
-        res  = _s3_client().list_objects_v2(Bucket=S3_BUCKET, Prefix=MARRIAGE_PREFIX)
-        mp4s = [o for o in res.get("Contents", []) if o["Key"].endswith(".mp4") and o["Size"] > 0]
-        if not mp4s:
-            return None
-
-        latest = max(mp4s, key=lambda o: o["LastModified"])
-        debug(f"Marriage: {Path(latest['Key']).name}")
-
-        return _download_if_needed(latest["Key"], apply_trim=True)
-
-    except (BotoCoreError, ClientError) as e:
-        debug(f"Marriage fetch error: {e}")
-        return None
+def fetch_train_clips(channel_name=None):
+    def _produce():
+        try:
+            keys  = _own_train_keys(channel_name)
+            clips = [c for c in (_download_if_needed(k, apply_trim=True) for k in keys) if c]
+            debug(f"Train[{channel_name}]: {len(clips)} own clips")
+            return clips
+        except (BotoCoreError, ClientError) as e:
+            debug(f"Train fetch error [{channel_name}]: {e}")
+            return []
+    return _ttl_memo("train", channel_name, _produce, empty=[])
 
 
 SEGMENT_FETCHERS = {
@@ -982,31 +1033,12 @@ def get_pending_slot():
             debug(f"Schedule slot hit: {slot_time} -> {seg_type}")
             _played_slots.add(play_key)
 
-            if seg_type == "news":
-                return ("news", None)
-
-            if seg_type == "train":
-                clips = fetch_train_clips()
-                if clips: return ("train", clips)
-                vege = fetch_latest_vege()
-                if vege: return ("vege", vege)
-                return ("news", None)
-
-            if seg_type == "vege":
-                vege = fetch_latest_vege()
-                if vege: return ("vege", vege)
-                clips = fetch_train_clips()
-                if clips: return ("train", clips)
-                return ("news", None)
-
-            fetcher = SEGMENT_FETCHERS.get(seg_type)
-            path    = fetcher() if fetcher else None
-            if path: return (seg_type, path)
-            vege = fetch_latest_vege()
-            if vege: return ("vege", vege)
-            clips = fetch_train_clips()
-            if clips: return ("train", clips)
-            return ("news", None)
+            # STRICT location-wise: payload ab PER-CHANNEL build_concat_list me
+            # resolve hota hai (apna latest clip ya segment SKIP). Global prefetch
+            # aur cross-segment degradation (bday->vege->train->news) END — wahi
+            # cross-location content ka source tha (e.g. Nalgonda ki marriage
+            # Khammam pe). 'news' => run_streamer silent refresh — unchanged.
+            return (seg_type, None)
 
     return None
 
@@ -1025,7 +1057,8 @@ def reset_played_slots_at_midnight():
 
 def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject_payload=None,
                       channel_name=None):
-    global _train_rotation_idx
+    # NOTE: inject_payload DEPRECATED/ignored — STRICT location-wise: har channel
+    # apna payload yahin resolve karta hai (apna latest clip ya segment SKIP).
     if not bulletins:
         debug(f"[{label}] No bulletins — skipping concat build")
         return None
@@ -1043,8 +1076,9 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
         debug(f"[{label}] {concat_path.name}: filler loop — {[b.name for b in valid]} ×{reps}")
         return concat_path
 
-    vege_path   = fetch_latest_vege()
-    train_clips = [t for t in fetch_train_clips() if t]
+    # STRICT own-location content only (None/[] => skip — kabhi doosre district ka nahi)
+    vege_path   = fetch_latest_vege(channel_name)
+    train_clips = [t for t in fetch_train_clips(channel_name) if t]
 
     # Validate inject and filler candidates up front
     if vege_path and not _is_valid_mp4(vege_path):
@@ -1052,24 +1086,33 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
         vege_path = None
     train_clips = [t for t in train_clips if _is_valid_mp4(t)]
 
+    # PER-CHANNEL train rotation (process-global counter cross-channel share karta tha)
+    _rot_key = str(channel_name or label or "").strip().lower()
+    def _next_train(clips):
+        i = _train_rotation_idx.get(_rot_key, 0)
+        _train_rotation_idx[_rot_key] = i + 1
+        return clips[i % len(clips)]
+
     lines = []
 
-    if inject_type and inject_type != "news" and inject_payload:
-        if inject_type == "train" and isinstance(inject_payload, list):
-            valid_inject = [c for c in inject_payload if _is_valid_mp4(c)]
-            if valid_inject:
-                clip = valid_inject[_train_rotation_idx % len(valid_inject)]
-                _train_rotation_idx += 1
-                lines.append(f"file \'{str(clip)}\'")
-                debug(f"[{label}] Inject train: {clip.name}")
-            else:
-                debug(f"[{label}] ⚠️ All inject train clips invalid — skipping inject")
-        elif isinstance(inject_payload, Path):
-            if _is_valid_mp4(inject_payload):
-                lines.append(f"file \'{str(inject_payload)}\'")
-                debug(f"[{label}] Inject {inject_type}: {inject_payload.name}")
-            else:
-                debug(f"[{label}] ⚠️ Inject file invalid ({inject_payload.name}) — skipping")
+    if inject_type and inject_type != "news":
+        # PER-CHANNEL inject: is channel ka APNA latest clip, warna SKIP.
+        # (inject_payload deprecated — strict location-wise resolution yahin.)
+        inj_clip = None
+        if inject_type == "train":
+            if train_clips:                      # own-only + upar validated
+                inj_clip = _next_train(train_clips)
+        elif inject_type == "vege":
+            inj_clip = vege_path                 # own-only + upar validated
+        else:
+            fetcher = SEGMENT_FETCHERS.get(inject_type)
+            p = fetcher(channel_name) if fetcher else None
+            inj_clip = p if (p and _is_valid_mp4(p)) else None
+        if inj_clip:
+            lines.append(f"file \'{str(inj_clip)}\'")
+            debug(f"[{label}] Inject {inject_type} (own): {Path(inj_clip).name}")
+        else:
+            debug(f"[{label}] No own {inject_type} content — inject skipped")
 
     # ── NotebookLM program bulletins (cached build) — agar channel ke liye ho ──
     # local + district = is district ke 2 channels; state = state-wide (har district
@@ -1148,15 +1191,14 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
         # ── Existing notebooklm flow (UNCHANGED) — har news ke baad poora block: ──
         #   news → notebooklm(local) → vege/train → notebooklm(district) → loop
         def _append_program_block():
+            # vege/train ab OWN-ONLY hain (upar strict fetch) — nahi to ye block
+            # unhe skip kar deta hai (no cross-district weave)
             if _nlm_l_ok:
                 lines.append(f"file \'{str(nlm_local)}\'")
             if vege_path:
                 lines.append(f"file \'{str(vege_path)}\'")
             elif train_clips:
-                global _train_rotation_idx
-                t = train_clips[_train_rotation_idx % len(train_clips)]
-                _train_rotation_idx += 1
-                lines.append(f"file \'{str(t)}\'")
+                lines.append(f"file \'{str(_next_train(train_clips))}\'")
             if _nlm_d_ok:
                 lines.append(f"file \'{str(nlm_district)}\'")
 
@@ -1180,9 +1222,7 @@ def build_concat_list(bulletins, concat_path, label="", inject_type=None, inject
             if i % 2 == 0 and vege_path:
                 lines.append(f"file \'{str(vege_path)}\'")
             elif i % 2 == 1 and train_clips:
-                t = train_clips[_train_rotation_idx % len(train_clips)]
-                _train_rotation_idx += 1
-                lines.append(f"file \'{str(t)}\'")
+                lines.append(f"file \'{str(_next_train(train_clips))}\'")
 
     if skipped:
         debug(f"[{label}] ⚠️ {skipped}/{len(bulletins)} bulletins skipped (corrupt)")
@@ -1391,19 +1431,89 @@ def _get_filler_path(channel_name, global_fallback=True):
     return FILLER_FILE if FILLER_FILE.exists() else None
 
 
+def _same_state_latest_bulletins(channel_name, max_files=MIN_BULLETINS):
+    """SAME-STATE sibling districts ke latest rendered bulletins (newest-first).
+    Location-wise fallback ke liye — wrong-state ka content kabhi nahi aata.
+    Crash-proof: kisi bhi error pe [] (caller agle tier pe chala jaata hai)."""
+    try:
+        from config import channel_state
+        st = channel_state(channel_name)
+        if not st:
+            return []
+        cands = []
+        for c in CHANNEL_DEFS:
+            nm = c["name"]
+            if nm.lower() == str(channel_name).strip().lower():
+                continue
+            if channel_state(nm) != st:
+                continue
+            try:
+                cands += get_all_bulletins(_wdir(nm))
+            except Exception:
+                continue
+        cands.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        return cands[:max_files]
+    except Exception:
+        return []
+
+
+def _location_fallback_chain(channel_name):
+    """Channel ke paas APNA fresh rendered bulletin nahi (render starve — e.g. Kakinada)
+    → location-wise LATEST content stream karo, most-local first:
+      1. apna notebooklm program bulletin (local → district)   [same district]
+      2. same-state sibling districts ke latest rendered bulletins
+      3. state notebooklm → national notebooklm                 [fan-out content]
+    Har tier apne try/except me — fail to agla tier. Sab fail → [] return, caller
+    existing filler tail pe girta hai (stream KABHI nahi tootta)."""
+    for kind in ("local", "district"):
+        try:
+            p = build_program_bulletin(channel_name, kind)
+            if p and _is_valid_mp4(Path(p)):
+                debug(f"[{channel_name}] 📍 location-fallback: own notebooklm ({kind}): {Path(p).name}")
+                return [Path(p)]
+        except Exception as e:
+            debug(f"[{channel_name}] location-fallback {kind} failed: {e}")
+    try:
+        sibs = _same_state_latest_bulletins(channel_name)
+        if sibs:
+            debug(f"[{channel_name}] 📍 location-fallback: same-state latest x{len(sibs)}: {sibs[0].name}")
+            return sibs
+    except Exception as e:
+        debug(f"[{channel_name}] location-fallback same-state failed: {e}")
+    for kind in ("state", "national"):
+        try:
+            p = build_program_bulletin(channel_name, kind)
+            if p and _is_valid_mp4(Path(p)):
+                debug(f"[{channel_name}] 📍 location-fallback: {kind} notebooklm: {Path(p).name}")
+                return [Path(p)]
+        except Exception as e:
+            debug(f"[{channel_name}] location-fallback {kind} failed: {e}")
+    return []
+
+
 def _with_fallback(folder, channel_name):
     primary = get_all_bulletins(folder)
     if len(primary) >= MIN_BULLETINS:
         return primary
-    # Supplement with other channels' bulletins if we have some but not enough
+    # Kam bulletins (1-4): SAME-STATE siblings se top-up (location-relevant).
+    # (Pehle get_all_bulletins(_BASE) tha — _BASE me channel-folders hain, bul_* nahi,
+    # to wo hamesha [] deta tha = dead code; ab same-state supplement sach me kaam karta.)
     if primary:
-        fallback = get_all_bulletins(_BASE)
+        fallback = []
+        if os.getenv("STREAM_LOCATION_FALLBACK", "1") == "1":
+            fallback = _same_state_latest_bulletins(channel_name)
         seen, merged = set(), []
         for f in primary + fallback:
             if str(f) not in seen:
                 seen.add(str(f)); merged.append(f)
         if merged:
             return merged
+    # ZERO apna rendered bulletin (render starve) → location-wise latest content
+    # (own notebooklm → same-state latest → state → national). Fail → filler tail.
+    if os.getenv("STREAM_LOCATION_FALLBACK", "1") == "1":
+        chain = _location_fallback_chain(channel_name)
+        if chain:
+            return chain
     # No content at all — per-location GEO filler PEHLE (confirmed correct per-channel:
     # "You Are Watching <Channel> TV"). Ye assets/intro_* (jo Kurnool-branded nikle) +
     # global filler se pehle hai, taaki har channel apna sahi identifier dikhaye.
@@ -1442,9 +1552,12 @@ def _launch_streams(inject_type=None, inject_payload=None):
         bulletins = _with_fallback(ch["watch_dir"], ch["name"])
         if not bulletins:
             debug(f"[{ch['label']}] No bulletins and no intro — skipping")
-        inj_t = inject_type    if i == 0 else None
-        inj_p = inject_payload if i == 0 else None
-        wrote = build_concat_list(bulletins, ch["concat"], ch["label"], inj_t, inj_p,
+        # STRICT location-wise: HAR channel ko inject_type milta hai — apna latest
+        # clip wahi resolve karta hai (ya skip). Payload deprecated (always None).
+        # (pehle i==0 => sirf Khammam ko inject milta tha, aur global payload
+        # kisi bhi district ka ho sakta tha.)
+        wrote = build_concat_list(bulletins, ch["concat"], ch["label"],
+                                  inject_type, None,
                                   channel_name=ch["name"])
         # Combined filler is pre-encoded (720p/25fps/baseline/no-B-frames) — copy mode is safe.
         p = start_ffmpeg_concat(ch["stream_key"], ch["label"], ch["concat"]) \

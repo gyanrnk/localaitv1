@@ -1000,30 +1000,25 @@ def _run_planner():
             t_watch_start = time()
             logger.info(f"⏱️  [WATCHER] Polling every {POLL_INTERVAL}s | timeout={MAX_WAIT_SEC}s | expecting {len(expected_ranks)} items")
 
+            # last-progress clock: timeout ab TOTAL time pe nahi, NO-PROGRESS pe hai.
+            # Render slow hone par (25-30+ min) total-timer 9/11 pe watcher maar deta
+            # tha aur bache items ke incidents (citizen-feed shorts) SILENTLY DROP ho
+            # jaate the. Jab tak naye item-markers aate rehte hain, watcher zinda
+            # rehta hai. Infinite-hang nahi ho sakta: build subprocess khud
+            # BUILD_TIMEOUT(3600s) se bounded hai → _build_done set hote hi exit.
+            _progress_t = time()
             while len(processed_ranks) < len(expected_ranks):
 
-                # Build thread crash check
-                # if not build_thread.is_alive() and not _build_result['video_path']:
-                #     logger.error("❌ [WATCHER] Build thread died without producing video — stopping watcher")
-                #     break
+                # Build-finish snapshot SCAN SE PEHLE — set ho to is iteration me ek
+                # FINAL sweep chalega (last-moment markers drop na ho), phir exit.
+                _build_finished = _build_done.is_set()
 
-                # if _build_done.is_set() and not _build_result['video_path']:
-                #     logger.error("❌ [WATCHER] Build thread finished without producing video — stopping watcher")
-                #     break
-
-                if _build_done.is_set():
-                    if _build_result['video_path']:
-                        logger.info("✅ [WATCHER] Build thread completed successfully")
-                        break
-                    elif _build_result.get('error'):
-                        logger.error(f"❌ [WATCHER] Build thread errored: {_build_result['error']}")
-                        break
-
-                # Timeout check
-                elapsed_watch = time() - t_watch_start
-                if elapsed_watch > MAX_WAIT_SEC:
-                    logger.error(f"❌ [WATCHER] Timeout after {MAX_WAIT_SEC}s — processed {len(processed_ranks)}/{len(expected_ranks)}")
+                # Timeout: MAX_WAIT_SEC tak KOI naya item process nahi hua (true stall)
+                if not _build_finished and time() - _progress_t > MAX_WAIT_SEC:
+                    logger.error(f"❌ [WATCHER] No progress for {MAX_WAIT_SEC}s — processed {len(processed_ranks)}/{len(expected_ranks)}")
                     break
+
+                _before_scan = len(processed_ranks)
 
                 # Scan for new item-ready markers
                 if os.path.exists(segments_dir):
@@ -1143,6 +1138,18 @@ def _run_planner():
                             logger.warning(f"  ⚠️ [rank={rank}] concat FAILED after {concat_elapsed}s")
 
                         processed_ranks.add(rank)
+
+                if len(processed_ranks) > _before_scan:
+                    _progress_t = time()          # naya item aaya — stall clock reset
+
+                if _build_finished:
+                    # build khatam + ek final sweep ho chuka — ab exit (pehle yahan
+                    # turant break tha jo aakhri markers chhod deta tha)
+                    if _build_result.get('error'):
+                        logger.error(f"❌ [WATCHER] Build thread errored: {_build_result['error']}")
+                    else:
+                        logger.info("✅ [WATCHER] Build thread completed — final marker sweep done")
+                    break
 
                 from time import sleep as _sleep
                 _sleep(POLL_INTERVAL)
@@ -2268,6 +2275,9 @@ def _process_batch_background(batch_items: list, batch_id: str):
 
 
 # ── NotebookLM bulletins (geo/ S3) — admin upload + UI list ─────────────────
+CDN_BASE_URL = os.getenv('CDN_BASE_URL', '').rstrip('/')
+
+
 def _check_admin_token() -> bool:
     """Bearer token must match BULLETIN_API_TOKEN or LOCALAITV_API_TOKEN."""
     auth = request.headers.get('Authorization', '')
@@ -2275,6 +2285,21 @@ def _check_admin_token() -> bool:
     valid = {os.getenv('BULLETIN_API_TOKEN', ''), os.getenv('LOCALAITV_API_TOKEN', '')}
     valid.discard('')
     return bool(tok) and tok in valid
+
+
+def _video_url(key: str, last_modified) -> str:
+    """Return CDN URL when CDN_BASE_URL is set, else presigned S3 GET (1h).
+    CDN_BASE_URL empty (default) = exact current behavior, no config needed."""
+    if CDN_BASE_URL:
+        import math
+        ts = math.floor(last_modified.timestamp()) if hasattr(last_modified, 'timestamp') else 0
+        return f"{CDN_BASE_URL}/{key}?v={ts}"
+    import s3_storage as _s3
+    cl, bkt = _s3._get_client(), _s3._bucket()
+    return cl.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': bkt, 'Key': key, 'ResponseContentType': 'video/mp4'},
+        ExpiresIn=3600)
 
 
 @app.route('/api/notebooklm/presign', methods=['POST'])
@@ -2350,10 +2375,7 @@ def notebooklm_list():
             for o in res.get('Contents', []):
                 if not o['Key'].endswith('.mp4') or o['Size'] <= 0:
                     continue
-                url = cl.generate_presigned_url(
-                    'get_object',
-                    Params={'Bucket': bkt, 'Key': o['Key'],
-                            'ResponseContentType': 'video/mp4'}, ExpiresIn=3600)
+                url = _video_url(o['Key'], o['LastModified'])
                 items.append({
                     'scope': scope, 'state': st, 'district': d, 'kind': k,
                     'filename': o['Key'].split('/')[-1], 'key': o['Key'],
@@ -2443,10 +2465,7 @@ def notebooklm_processed_bulletins():
                         continue
                     if kind_f and kind != kind_f:
                         continue
-                    url = cl.generate_presigned_url(
-                        'get_object',
-                        Params={'Bucket': bkt, 'Key': o['Key'],
-                                'ResponseContentType': 'video/mp4'}, ExpiresIn=3600)
+                    url = _video_url(o['Key'], o['LastModified'])
                     items.append({
                         'channel': ch, 'location_id': int(loc_id) if loc_id else 0,
                         'kind': kind,

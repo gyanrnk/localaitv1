@@ -22,6 +22,7 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_REGION=ap-south-2
       - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - CDN_BASE_URL=${CDN_BASE_URL}
       - S3_BUCKET_NAME_M=${S3_BUCKET_NAME_M}
       - AWS_ACCESS_KEY_ID_M=${AWS_ACCESS_KEY_ID_M}
       - AWS_SECRET_ACCESS_KEY_M=${AWS_SECRET_ACCESS_KEY_M}
@@ -59,6 +60,7 @@ services:
       - ENABLE_CLEANUP=${ENABLE_CLEANUP:-true}
       - TICKER_ENABLED=${TICKER_ENABLED:-true}
       - BGM_ENABLED=${BGM_ENABLED:-true}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/adc.json
     volumes:
       # Local storage for inputs/outputs
       - localaitv_inputs:/app/inputs
@@ -66,6 +68,7 @@ services:
       # Static assets
       - ./assets:/app/assets:ro
       - ./news_intro.mpeg:/app/news_intro.mpeg:ro
+      - ./adc.json:/app/adc.json:ro
     networks:
       - localaitv_network
     healthcheck:

@@ -57,6 +57,9 @@ def _bucket() -> str:
     return os.getenv('S3_BUCKET_NAME', '')
 
 
+_CDN_BASE_URL = os.getenv('CDN_BASE_URL', '').rstrip('/')
+
+
 # ── Geo-first static asset loader ───────────────────────────────────────────────
 _GEO_ASSET_CACHE_DIR = "outputs/geo_asset_cache"  # under /app/outputs volume → survives deploys
 
@@ -141,16 +144,32 @@ _CONTENT_TYPES = {
     '.webp': 'image/webp',
 }
 
+# Long-lived immutable cache for static media (videos/images). Lets the CDN and
+# browser cache these objects indefinitely → no re-fetch, no playback buffering.
+_LONG_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+_CACHEABLE_EXTS = {'.mp4', '.jpg', '.jpeg', '.png', '.gif', '.webp'}
+
+
+def _extra_args_for(path_or_key: str) -> dict:
+    """Derive ExtraArgs (ContentType + CacheControl) from the file extension.
+    Unknown extension → empty dict (behavior unchanged)."""
+    ext = os.path.splitext(path_or_key)[1].lower()
+    extra = {}
+    if ext in _CONTENT_TYPES:
+        extra['ContentType'] = _CONTENT_TYPES[ext]
+    if ext in _CACHEABLE_EXTS:
+        extra['CacheControl'] = _LONG_CACHE_CONTROL
+    return extra
+
 def upload_file(local_path: str, s3_key: str, bucket: str = None) -> Optional[str]:
     """Upload a local file to S3. Returns s3_key on success, None on failure."""
     if not local_path or not os.path.exists(local_path):
         _log(f"[S3] WARN upload_file: local file missing: {local_path}")
         return None
     bkt = bucket or _bucket()
-    ext = os.path.splitext(local_path)[1].lower()
-    extra = {}
-    if ext in _CONTENT_TYPES:
-        extra = {'ContentType': _CONTENT_TYPES[ext]}
+    # Derive ContentType + CacheControl from the S3 key extension so CDN/browser
+    # can cache media and serve it progressively (no re-buffering).
+    extra = _extra_args_for(s3_key)
     try:
         _get_client().upload_file(local_path, bkt, s3_key, ExtraArgs=extra or None)
         _log(f"[S3] OK Uploaded: {s3_key}")
@@ -195,8 +214,9 @@ def file_exists(s3_key: str, bucket: str = None) -> bool:
 def upload_bytes(data: bytes, s3_key: str, bucket: str = None) -> Optional[str]:
     """Upload raw bytes to S3. Returns s3_key on success, None on failure."""
     bkt = bucket or _bucket()
+    extra = _extra_args_for(s3_key)
     try:
-        _get_client().upload_fileobj(io.BytesIO(data), bkt, s3_key)
+        _get_client().upload_fileobj(io.BytesIO(data), bkt, s3_key, ExtraArgs=extra or None)
         _log(f"[S3] OK Uploaded bytes: {s3_key}")
         return s3_key
     except Exception as e:
@@ -235,7 +255,10 @@ def delete_file(s3_key: str, bucket: str = None) -> bool:
 # ── Async upload (fire-and-forget background thread) ─────────────────────────
 
 def public_url(s3_key: str, bucket: str = None) -> str:
-    """Return the public HTTPS URL for an S3 key."""
+    """Return the public HTTPS URL for an S3 key.
+    CDN_BASE_URL set => CDN URL (no S3 direct); unset => original S3 URL."""
+    if _CDN_BASE_URL:
+        return f"{_CDN_BASE_URL}/{s3_key}"
     bkt    = bucket or _bucket()
     region = os.getenv('AWS_REGION', 'ap-south-2')
     return f"https://{bkt}.s3.{region}.amazonaws.com/{s3_key}"

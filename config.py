@@ -727,6 +727,23 @@ LOCATION_ID_TO_CHANNEL = {
     "209": "Kakinada",   "285": "Nalore",   "305": "Kurnool",  "335": "Tirupati",
     "344": "Guntur",
 }
+
+# Reverse: channel(lower) -> [backend location ids] — COMPLETE registry inversion
+# (209 Kakinada / 335 Tirupati included). NOTE: channel_backend_ids() upar wala
+# CLASSIFIED_LOCATION_MAP par hai jisme 209/335 MISSING hain — location-strict
+# features ke liye HAMESHA yehi helper use karo. Naya location sirf
+# LOCATION_ID_TO_CHANNEL me add karo => saare consumers auto-update.
+_CHANNEL_TO_LOCATION_IDS = {}
+for _bid, _ch in LOCATION_ID_TO_CHANNEL.items():
+    _CHANNEL_TO_LOCATION_IDS.setdefault(_ch.strip().lower(), []).append(_bid)
+
+def location_ids_for_channel(channel_name):
+    """stream channel name -> [backend location ids] from the COMPLETE
+    LOCATION_ID_TO_CHANNEL registry. [] if unknown/None — caller skips."""
+    if not channel_name:
+        return []
+    return list(_CHANNEL_TO_LOCATION_IDS.get(str(channel_name).strip().lower(), []))
+
 _NEWS_CHANNELS = ["Khammam", "Kurnool", "Karimnagar", "Anatpur", "Kakinada",
                   "Nalore", "Tirupati", "Guntur", "Warangal", "Nalgonda"]
 
