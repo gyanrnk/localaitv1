@@ -119,6 +119,10 @@ AD_SEP = '      '
 VIDEO_CODEC = 'libx264'
 PRESET      = 'ultrafast'
 CRF         = 23
+# Bitrate ceiling for the final encode — caps CRF's variable bitrate so
+# video-heavy bulletins don't balloon (e.g. 4887k -> ~4500k). Speed & quality same.
+MAXRATE     = '4500k'
+BUFSIZE     = '9000k'
 # VIDEO_CODEC = "h264_nvenc"
 # PRESET      = "p4"
 
@@ -623,6 +627,7 @@ def _apply_ticker_to_clip(src: str, out: str,
         '-filter_complex', fc,
         '-map', '[outv]', '-map', '0:a',
         '-c:v', VIDEO_CODEC, '-preset', PRESET, '-crf', str(CRF),
+        '-maxrate', MAXRATE, '-bufsize', BUFSIZE,
         '-c:a', 'copy',
         '-video_track_timescale', '12800',
     ]
@@ -786,6 +791,7 @@ def add_ticker_overlay(video_path: str, out_path: str,
             '-filter_complex', fc,
             '-map', '[outv]', '-map', '0:a',
             '-c:v', VIDEO_CODEC, '-preset', PRESET, '-crf', str(CRF),
+            '-maxrate', MAXRATE, '-bufsize', BUFSIZE,
             '-c:a', 'copy',
             '-video_track_timescale', '12800',
             '-t', str(duration),
