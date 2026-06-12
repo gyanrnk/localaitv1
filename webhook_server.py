@@ -387,13 +387,18 @@ def _send_bulletin_items_to_api(items: list):
             if db_row.get("incident_id"):
                 logger.info(f"  ⏭️  Item {counter} already has incident_id={db_row['incident_id']} — skip")
                 return None
-            # Fresh DB check catches race where two builds overlap before write-back
+            # ── Atomic claim (race-safe) ──────────────────────────────────────
+            # db.py me fetchone NAHI hai → purana fresh-check silently no-op karta
+            # tha. UPDATE ... RETURNING atomic hai: WHERE incident_id IS NULL matlab
+            # sirf PEHLA caller (fast-path YA bulletin watcher) jeetega; doosre ko 0
+            # rows → skip → DOUBLE-POST nahi. Real id 'posting' ko success par
+            # overwrite kar deta hai; failure par neeche NULL reset hota hai (retry).
             try:
-                _fresh = _db_items.fetchone(
-                    "SELECT incident_id FROM news_items WHERE counter = %s", (counter,)
-                )
-                if _fresh and _fresh.get("incident_id"):
-                    logger.info(f"  ⏭️  Item {counter} incident_id set by concurrent thread — skip")
+                _claim = _db_items.fetchall(
+                    "UPDATE news_items SET incident_id = %s WHERE counter = %s "
+                    "AND incident_id IS NULL RETURNING counter", ('posting', counter))
+                if not _claim:
+                    logger.info(f"  ⏭️  Item {counter} already claimed by another thread — skip")
                     return None
             except Exception:
                 pass
@@ -524,6 +529,11 @@ def _send_bulletin_items_to_api(items: list):
                 return (counter, media_type, str(incident_id))
             else:
                 logger.warning(f"  ⚠️ Item {counter} → {resp.status_code}: {resp.text[:200]}")
+                try:  # post fail → claim ('posting') reset to NULL so item retry ho sake
+                    _db_items.execute("UPDATE news_items SET incident_id = NULL "
+                                      "WHERE counter = %s AND incident_id = %s", (counter, 'posting'))
+                except Exception:
+                    pass
                 from event_logger import log_event
                 log_event(
                     event        = 'api_posted',
@@ -536,6 +546,11 @@ def _send_bulletin_items_to_api(items: list):
 
         except Exception as e:
             logger.error(f"  ❌ Item {item.get('counter')} API error: {e}")
+            try:  # exception → claim reset (warna item 'posting' me strand ho jayega)
+                _db_items.execute("UPDATE news_items SET incident_id = NULL "
+                                  "WHERE counter = %s AND incident_id = %s", (item.get('counter'), 'posting'))
+            except Exception:
+                pass
             return None
 
     logger.info(f"📡 Sending {len(items)} items to Incidents API (parallel)...")
@@ -2159,6 +2174,97 @@ def local_incident_get():
 
 ##### ── 08-04-15-43 ────────────────────────────────────────────────────
 
+def _render_single_item_and_post(user_id: str = '', counter: int = None):
+    """⚡ FAST-PATH: input process hote hi us EK item ka short video render +
+    LOCATION-WISE incident post — bulletin build ka wait NAHI, taaki user jaldi
+    dekhe. IMAGE items ke liye (sabse common); video/audio normal bulletin flow se
+    handle honge. Dedup: incident_id set ho to skip (bulletin watcher bhi yahi
+    check karta hai). Koi bhi error par chup-chaap return — normal flow incident
+    baad me post kar lega, kuch toot nahi sakta (purely additive)."""
+    try:
+        import db as _db
+        import s3_storage as _s3
+        from config import (INPUT_IMAGE_DIR, OUTPUT_AUDIO_DIR, BASE_DIR,
+                            get_channel_logo_path, resolve_news_channel)
+        from video_builder import build_image_slideshow, _save_to_item_cache
+
+        # ── item dhoondo: counter, warna user ki latest unposted complete item ──
+        # NOTE: db.py me sirf fetchall hai (fetchone nahi) → fetchall(...)[0].
+        if counter is not None:
+            _rs = _db.fetchall("SELECT * FROM news_items WHERE counter=%s LIMIT 1", (counter,))
+        else:
+            _rs = _db.fetchall(
+                "SELECT * FROM news_items WHERE user_id=%s AND incident_id IS NULL "
+                "AND status='complete' ORDER BY counter DESC LIMIT 1", (user_id,))
+        row = _rs[0] if _rs else None
+        if not row:
+            return
+        cnt = row['counter']
+        if row.get('incident_id'):                      # already posted → skip (dedup)
+            return
+        if (row.get('media_type') or '') != 'image':    # fast-path sirf image; baaki normal flow
+            return
+
+        # ── script audio (local; warna S3 se) ──
+        sa = os.path.join(OUTPUT_AUDIO_DIR, row.get('script_audio') or '')
+        if not os.path.exists(sa):
+            try:
+                _b = _s3.download_bytes(_s3.key_for_audio(row.get('script_audio')))
+                if _b:
+                    os.makedirs(OUTPUT_AUDIO_DIR, exist_ok=True); open(sa, 'wb').write(_b)
+            except Exception:
+                pass
+        if not os.path.exists(sa):
+            logger.warning(f"  ⚡ [fast-path] item {cnt}: audio missing — skip"); return
+
+        # ── images (basename resolve + S3 fallback) ──
+        _raw = row.get('multi_image_paths') or []
+        if isinstance(_raw, str):
+            try: _raw = json.loads(_raw)
+            except Exception: _raw = [_raw]
+        imgs = []
+        for p in _raw:
+            bn = os.path.basename(str(p)); lp = os.path.join(INPUT_IMAGE_DIR, bn)
+            if not os.path.exists(lp):
+                try:
+                    _b = _s3.download_bytes(_s3.key_for_input('image', bn))
+                    if _b:
+                        os.makedirs(INPUT_IMAGE_DIR, exist_ok=True); open(lp, 'wb').write(_b)
+                except Exception:
+                    pass
+            if os.path.exists(lp):
+                imgs.append(lp)
+        if not imgs:
+            logger.warning(f"  ⚡ [fast-path] item {cnt}: no images — skip"); return
+
+        # ── logo (LOCATION-WISE channel) + reporter ──
+        ch   = resolve_news_channel(row.get('location_id'), row.get('location_name') or '') or ''
+        logo = get_channel_logo_path(ch, BASE_DIR)
+        ri   = {'name': row.get('sender_name',''), 'photo_path': row.get('photo_path',''),
+                'gif_path': row.get('gif_path',''), 'location_name': row.get('location_name','')}
+
+        # ── RENDER single item (no bulletin) ──
+        out_dir = os.path.join(BASE_DIR, 'outputs', 'item_video_cache'); os.makedirs(out_dir, exist_ok=True)
+        out = os.path.join(out_dir, f'item_{cnt}_image.mp4')
+        _t0 = time()
+        ok = build_image_slideshow(imgs, sa, logo, out, reporter_info=ri)
+        if not (ok and os.path.exists(out)):
+            logger.warning(f"  ⚡ [fast-path] item {cnt}: render failed — skip"); return
+        _save_to_item_cache(cnt, out, 'image')
+        logger.info(f"  ⚡ [fast-path] item {cnt} rendered in {time()-_t0:.1f}s → posting "
+                    f"(loc {row.get('location_id')}/{row.get('location_name')})")
+
+        # ── LOCATION-WISE incident post (reuse existing; location_id item me hai) ──
+        _send_bulletin_items_to_api([{
+            'counter': cnt, 'headline': row.get('headline',''), 'media_type': 'image',
+            'script_filename': row.get('script_filename'),
+            'location_id': row.get('location_id'), 'location_name': row.get('location_name'),
+            'user_id': row.get('user_id'), 'created_at': row.get('created_at',''),
+        }])
+    except Exception as e:
+        logger.warning(f"  ⚡ [fast-path] error: {e}")
+
+
 def _process_multi_media_report_background(text: str, video_paths: list, image_paths: list,
                                             audio_paths: list, sender: str, report_id: str, email: str, name, profile_picture='', location_id=0, location_address='', location_name='', user_id='', created_at=''):
     import report_state_manager as _rsm
@@ -2182,6 +2288,11 @@ def _process_multi_media_report_background(text: str, video_paths: list, image_p
         )
         if result.get('success') and result.get('headline'):
             logger.info(f"✅ Multi-media report {report_id}: {result['headline'][:50]}")
+            # ⚡ FAST-PATH: us item ka short turant render + LOCATION-WISE incident post
+            #    (bulletin build ka wait nahi → user jaldi dekhe). Image-only; safe/additive.
+            threading.Thread(target=_render_single_item_and_post,
+                             kwargs={'user_id': user_id, 'counter': result.get('counter')},
+                             daemon=True).start()
         else:
             err = result.get('error', 'unknown error')
             logger.error(f"❌ Multi-media report {report_id} failed: {err}")
