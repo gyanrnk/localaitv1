@@ -470,9 +470,14 @@ def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None
         #   state    → geo/states/<state>/_state/notebooklm_processed/ (us state ke districts me fan-out)
         # PER-DISTRICT scopes (alag content) = per-district:
         #   local/district → geo/states/<state>/districts/<dist>/notebooklm_processed/
-        # Telugu naam, date-wise (ek file per kind per din — overwrite, storage control):
-        #   sthanika/jilla/rashtra/jatiya _vaartalu_<YYYYMMDD>.mp4
-        ts    = datetime.now().strftime("%Y%m%d")
+        # Telugu naam, UNIQUE per build (date+TIME) — overwrite NAHI. Same-din rebuild
+        # ab naya key banata hai taaki CDN (content.localaitv.com; cache policy
+        # QueryStringBehavior=none → ?v buster dead) purana stale na serve kare. Yahi
+        # legacy bulletins/<Channel>/bul_<ts>.mp4 ka working pattern hai. Purane STEP-13
+        # prune (NOTEBOOKLM_PROCESSED_RETENTION_DAYS) se newest-per-(folder,kind) rakhke
+        # baaki retention-din+ purane delete hote hain.
+        #   sthanika/jilla/rashtra/jatiya _vaartalu_<YYYYMMDD_HHMMSS>.mp4
+        ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
         _name = f"{_BULLETIN_NAME_TE.get(kind, kind)}_vaartalu_{ts}.mp4"
         if kind == "national":
             s3_key = f"geo/national/notebooklm_processed/{_name}"
@@ -485,7 +490,8 @@ def _maybe_send_program_to_api(channel_name: str, kind: str, video_path) -> None
             s3_key = (f"{_gp}/notebooklm_processed/{_name}" if _gp
                       else f"bulletins/{channel_name}/{_name}")
         _s3_client_main().upload_file(str(video_path), S3_BUCKET_MAIN, s3_key,
-                                      ExtraArgs={'ContentType': 'video/mp4'})
+                                      ExtraArgs={'ContentType': 'video/mp4',
+                                                 'CacheControl': 'public, max-age=31536000, immutable'})
         marker.write_text(s3_key)        # is build ko 'uploaded' mark karo (re-upload avoid)
         debug(f"[{channel_name}/{kind}] ✅ processed bulletin S3 uploaded (PATH 2): {s3_key}")
     except Exception as e:

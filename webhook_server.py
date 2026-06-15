@@ -1874,10 +1874,16 @@ def cleanup_old_data_loop():
                         if '/notebooklm_processed/' not in _k:
                             continue
                         _fn = _k.rsplit('/', 1)[-1]
-                        if not (_fn.startswith('nlm_') and _fn.endswith('.mp4')):
+                        if not _fn.endswith('.mp4'):
                             continue
                         _parts = _fn.split('_')
-                        _kind  = _parts[1] if len(_parts) >= 3 else ''
+                        # nlm_<kind>_<ts>.mp4 (purana) | <telugu_kind>_vaartalu_<ts>.mp4 (naya unique-key)
+                        if _fn.startswith('nlm_'):
+                            _kind = _parts[1] if len(_parts) >= 3 else ''
+                        elif len(_parts) >= 2 and _parts[1] == 'vaartalu':
+                            _kind = _parts[0]
+                        else:
+                            continue
                         _folder = _k.rsplit('/', 1)[0]
                         _grp.setdefault((_folder, _kind), []).append(_o)
                 _del = []
