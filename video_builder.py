@@ -802,10 +802,9 @@ def _reporter_gif_filter_suffix(reporter_index, gif_index, duration):
     
     if reporter_index is not None:
         suffix += (
-            f";[{reporter_index}:v]scale={WIDTH}:{HEIGHT},format=rgba"
-            f",fade=t=out:st={REPORTER_DURATION - FADE_DUR}:d={FADE_DUR}:alpha=1[rep_faded]"
+            f";[{reporter_index}:v]scale={WIDTH}:{HEIGHT},format=rgba[rep_ov]"
             f";[outv]format=rgba[outv_r]"
-            f";[outv_r][rep_faded]overlay=0:0:enable='lte(t,{REPORTER_DURATION})'[after_reporter]"
+            f";[outv_r][rep_ov]overlay=0:0:enable='lt(mod(t,{2*(REPORTER_DURATION + GIF_DURATION)}),{REPORTER_DURATION})'[after_reporter]"
         )
         last = '[after_reporter]'
     else:
@@ -813,12 +812,10 @@ def _reporter_gif_filter_suffix(reporter_index, gif_index, duration):
         last = '[after_reporter]'
  
     if gif_index is not None:
-        gif_end = REPORTER_DURATION + 5  # GIF 5 sec dikhega
+        # BLINK: reporter ON 5s -> OFF 5s -> location ON 5s -> OFF 5s -> repeat (cycle=20s)
         suffix += (
-            f";[{gif_index}:v]format=rgba"
-            f",fade=t=in:st={REPORTER_DURATION}:d={FADE_DUR}:alpha=1"
-            f",fade=t=out:st={gif_end - FADE_DUR}:d={FADE_DUR}:alpha=1[gif_faded]"
-            f";{last}[gif_faded]overlay=0:0:enable='between(t,{REPORTER_DURATION},{gif_end})'[final]"
+            f";[{gif_index}:v]format=rgba[gif_ov]"
+            f";{last}[gif_ov]overlay=0:0:enable='between(mod(t,{2*(REPORTER_DURATION + GIF_DURATION)}),{REPORTER_DURATION + GIF_DURATION},{REPORTER_DURATION + 2*GIF_DURATION})'[final]"
         )
         return suffix, '[final]'
     else:
