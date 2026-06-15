@@ -1344,8 +1344,10 @@ def poll_reports_loop():
                     if not report_id or report_id in _processed_report_ids:
                         continue
 
-                    # Only process admin-approved reports
-                    if report.get('status') != 'approved':
+                    # Only process admin-approved reports. Robust match (strip+lower) —
+                    # same as _enqueue_report (L1945) — taaki 'Approved' / ' approved '
+                    # (case/whitespace variants) galti se skip na ho jaayein.
+                    if (report.get('status') or '').strip().lower() != 'approved':
                         logger.info(f"⏭️ Skipping report {report_id} — status='{report.get('status')}' (not approved)")
                         continue
 
