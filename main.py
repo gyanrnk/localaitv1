@@ -1094,7 +1094,8 @@ class NewsBot:
                     pass
         print("🧹 Temp files cleaned up")
  
-        result.update({'success': True, 'script': script, 'headline': headline})
+        result.update({'success': True, 'script': script, 'headline': headline,
+                       'counter': counter})
         print("✅ Multi-media processing complete!")
         print("=" * 60)
         return result

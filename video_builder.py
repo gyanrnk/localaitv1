@@ -2321,13 +2321,20 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
         clip_end   = item.get('clip_end')
 
         # ── Cache reuse: skip rebuild if item video already exists ────────
-        # Invalidate if script audio is newer (atempo change, TTS regen, etc.)
+        # Invalidate only if the ORIGINAL ingest audio (OUTPUT_AUDIO_DIR) is newer than
+        # the cache — NOT the bulletin's sa_p copy. atempo re-encodes that copy in-place
+        # giving it a fresh mtime, which would wrongly invalidate a valid on-approval
+        # -rendered segment. Original audio mtime = ingest time (always older than the
+        # cached segment) → on-approval segment REUSE hota hai (no second render).
         _cached = os.path.join(_ITEM_VIDEO_CACHE_DIR, f'item_{counter}_{media_type}.mp4')
+        _orig_sa   = (os.path.join(BASE_OUTPUT_DIR, 'audios', item.get('script_audio', ''))
+                      if item.get('script_audio') else '')
+        _audio_ref = _orig_sa if (_orig_sa and os.path.exists(_orig_sa)) else sa_p
         _cache_valid = (
             counter and
             os.path.exists(_cached) and
             os.path.getsize(_cached) > 100_000 and
-            (not os.path.exists(sa_p) or os.path.getmtime(sa_p) <= os.path.getmtime(_cached))
+            (not os.path.exists(_audio_ref) or os.path.getmtime(_audio_ref) <= os.path.getmtime(_cached))
         )
         if _cache_valid:
             news_seg_map[rank] = [_cached]

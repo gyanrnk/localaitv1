@@ -2161,6 +2161,76 @@ def local_incident_get():
 
 ##### ── 08-04-15-43 ────────────────────────────────────────────────────
 
+def _render_single_item_and_post(counter: int = None):
+    """⚡ Render-on-approval (image items): report approve+process hote hi us EK item ka
+    segment TURANT render → item_cache (+ S3) → incident/short post. Bulletin build baad
+    me isi cached item_<counter>_image.mp4 ko REUSE karta hai (no second render). Daemon
+    thread; har error chup-chaap (normal bulletin flow segment baad me bana lega — purely
+    additive, kuch toot-ta nahi). Phase A = image-only (video items abhi bulletin-time pe)."""
+    try:
+        if not counter:
+            return
+        import db as _db, json as _json
+        import s3_storage as _s3
+        from config import (OUTPUT_AUDIO_DIR, BASE_OUTPUT_DIR, BASE_DIR,
+                            ADDRESS_GIF_PATH, get_channel_logo_path, resolve_news_channel)
+        from video_builder import build_image_slideshow, _save_to_item_cache
+
+        _rs = _db.fetchall("SELECT * FROM news_items WHERE counter=%s LIMIT 1", (counter,))
+        row = _rs[0] if _rs else None
+        if not row or row.get('incident_id'):          # already posted → dedup skip
+            return
+        if (row.get('media_type') or '') != 'image':   # Phase A: sirf image
+            return
+
+        # script audio — local (abhi-abhi ingest me bana), warna S3 se
+        sa = os.path.join(OUTPUT_AUDIO_DIR, row.get('script_audio') or '')
+        if not (row.get('script_audio') and os.path.exists(sa)):
+            try:
+                _b = _s3.download_bytes(_s3.key_for_audio(row.get('script_audio')))
+                if _b:
+                    os.makedirs(OUTPUT_AUDIO_DIR, exist_ok=True)
+                    open(sa, 'wb').write(_b)
+            except Exception:
+                pass
+        if not os.path.exists(sa):
+            logger.warning(f"⚡ [on-approval] item {counter}: audio missing — skip")
+            return
+
+        # images — build_image_slideshow khud basename + S3 fallback se resolve karta hai
+        _imgs = row.get('multi_image_paths') or []
+        if isinstance(_imgs, str):
+            try:    _imgs = _json.loads(_imgs)
+            except Exception: _imgs = [_imgs]
+        if not _imgs:
+            return
+
+        ch   = resolve_news_channel(row.get('location_id'), row.get('location_name') or '') or ''
+        logo = get_channel_logo_path(ch, BASE_DIR)
+        ri   = {'name':          row.get('sender_name', ''),
+                'photo_path':    row.get('sender_photo', ''),     # FIX: real col (Sameer ne photo_path padha tha)
+                'gif_path':      row.get('sender_gif') or (ADDRESS_GIF_PATH if os.path.exists(ADDRESS_GIF_PATH) else ''),
+                'location_name': row.get('location_name', '')}
+
+        _wd = os.path.join(BASE_OUTPUT_DIR, '_onapproval')
+        os.makedirs(_wd, exist_ok=True)
+        out = os.path.join(_wd, f'item_{counter}_image.mp4')
+        if not (build_image_slideshow(_imgs, sa, logo, out, reporter_info=ri) and os.path.exists(out)):
+            logger.warning(f"⚡ [on-approval] item {counter}: render failed — skip")
+            return
+        _save_to_item_cache(counter, out, 'image')      # → ITEM_VIDEO_CACHE_DIR (bulletin reuse) + S3 async
+        logger.info(f"⚡ [on-approval] item {counter} rendered + cached → posting short "
+                    f"(loc {row.get('location_id')}/{row.get('location_name')})")
+        _send_bulletin_items_to_api([{
+            'counter': counter, 'headline': row.get('headline', ''), 'media_type': 'image',
+            'script_filename': row.get('script_filename'),
+            'location_id': row.get('location_id'), 'location_name': row.get('location_name'),
+            'user_id': row.get('user_id'), 'created_at': row.get('created_at', ''),
+        }])
+    except Exception as e:
+        logger.warning(f"⚡ [on-approval] error: {e}")
+
+
 def _process_multi_media_report_background(text: str, video_paths: list, image_paths: list,
                                             audio_paths: list, sender: str, report_id: str, email: str, name, profile_picture='', location_id=0, location_address='', location_name='', user_id='', created_at=''):
     import report_state_manager as _rsm
@@ -2184,6 +2254,13 @@ def _process_multi_media_report_background(text: str, video_paths: list, image_p
         )
         if result.get('success') and result.get('headline'):
             logger.info(f"✅ Multi-media report {report_id}: {result['headline'][:50]}")
+            # ⚡ Render-on-approval: is item ka segment TURANT render + item_cache (+S3) + short post.
+            #    Bulletin build baad me isi cached item_<counter>_image.mp4 ko REUSE karega
+            #    (no second render). Daemon thread + fail-safe — error pe normal bulletin flow
+            #    segment baad me bana lega (purely additive, kuch toot-ta nahi). Phase A: image-only.
+            threading.Thread(target=_render_single_item_and_post,
+                             kwargs={'counter': result.get('counter')},
+                             daemon=True).start()
         else:
             err = result.get('error', 'unknown error')
             logger.error(f"❌ Multi-media report {report_id} failed: {err}")
