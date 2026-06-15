@@ -1,0 +1,8 @@
+# Terraform local working dir + state — NEVER commit (state can contain sensitive data)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+# Keep .terraform.lock.hcl committed (provider version lock) — do NOT ignore it.

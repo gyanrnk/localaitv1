@@ -53,8 +53,13 @@ RUN ffmpeg -hide_banner -encoders 2>/dev/null | grep -q 'h264_nvenc' \
     || (echo "[FATAL] h264_nvenc NOT in this ffmpeg build — switch to a source/static build" && exit 1)
 
 # ── Python dependencies ──────────────────────────────────────────────────────
+# --ignore-installed: the CUDA/Ubuntu base ships some distutils system packages
+# (e.g. blinker 1.4) that pip cannot cleanly uninstall when a dep wants a newer
+# version; ignoring already-installed packages installs fresh copies and avoids
+# the "Cannot uninstall blinker 1.4 (distutils installed project)" build failure.
 COPY requirements.txt .
-RUN python3.11 -m pip install --no-cache-dir -r requirements.txt
+RUN python3.11 -m pip install --no-cache-dir --upgrade pip \
+ && python3.11 -m pip install --no-cache-dir --ignore-installed -r requirements.txt
 
 # ── Playwright Chromium (used by ticker_overlay.py) + its OS deps ────────────
 RUN python3.11 -m playwright install --with-deps chromium

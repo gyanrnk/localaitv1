@@ -1,5 +1,5 @@
 # ============================================================
-# Terraform providers & backend (Phase 1 — ECR + OIDC only)
+# Terraform providers & backend (Phase 1 - ECR + OIDC only)
 # ============================================================
 # Region: ap-south-1 (Mumbai). Staging environment.
 #
