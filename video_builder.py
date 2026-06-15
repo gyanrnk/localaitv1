@@ -804,7 +804,7 @@ def _reporter_gif_filter_suffix(reporter_index, gif_index, duration):
         suffix += (
             f";[{reporter_index}:v]scale={WIDTH}:{HEIGHT},format=rgba[rep_ov]"
             f";[outv]format=rgba[outv_r]"
-            f";[outv_r][rep_ov]overlay=0:0:enable='lt(mod(t,{REPORTER_DURATION + GIF_DURATION}),{REPORTER_DURATION})'[after_reporter]"
+            f";[outv_r][rep_ov]overlay=0:0:enable='lt(mod(t,{REPORTER_DURATION + GIF_DURATION}),{REPORTER_DURATION})*lt(t,{2*(REPORTER_DURATION + GIF_DURATION)})'[after_reporter]"
         )
         last = '[after_reporter]'
     else:
@@ -812,10 +812,11 @@ def _reporter_gif_filter_suffix(reporter_index, gif_index, duration):
         last = '[after_reporter]'
  
     if gif_index is not None:
-        # ALTERNATE (no gaps): reporter ON 0-5 -> location ON 5-10 -> repeat (cycle=10s)
+        # ALTERNATE, sirf 2 LOOPS phir STOP: rep 0-5, loc 5-10, rep 10-15, loc 15-20,
+        # uske baad byline OFF (baaki item duration plain). cycle=10s; bound t < 2*cycle (=20s).
         suffix += (
             f";[{gif_index}:v]format=rgba[gif_ov]"
-            f";{last}[gif_ov]overlay=0:0:enable='gte(mod(t,{REPORTER_DURATION + GIF_DURATION}),{REPORTER_DURATION})'[final]"
+            f";{last}[gif_ov]overlay=0:0:enable='gte(mod(t,{REPORTER_DURATION + GIF_DURATION}),{REPORTER_DURATION})*lt(t,{2*(REPORTER_DURATION + GIF_DURATION)})'[final]"
         )
         return suffix, '[final]'
     else:
