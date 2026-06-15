@@ -1,0 +1,79 @@
+# ============================================================
+# AWS ECR Build & Push (Phase 1 — additive, parallel to deploy.yml)
+# ============================================================
+# Builds the GPU builder image (Dockerfile.gpu) and pushes it to
+# Amazon ECR repository `laitv-stg-builder` in ap-south-1.
+#
+# Auth: GitHub OIDC -> IAM role (NO long-lived AWS keys).
+#   The role ARN is supplied via the GitHub secret AWS_OIDC_ROLE_ARN.
+#   The trust policy for that role is created by deploy/aws/terraform/oidc.tf.
+#
+# This workflow does NOT touch the existing deploy.yml (Hostinger -> GHCR).
+# ============================================================
+
+name: aws-ecr
+
+on:
+  push:
+    branches:
+      - aws-migration
+      - main
+    paths:
+      - "Dockerfile.gpu"
+      - "requirements.txt"
+      - "*.py"
+      - ".github/workflows/aws-ecr.yml"
+  workflow_dispatch: {}
+
+# Required for OIDC token issuance + repo checkout.
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: aws-ecr-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: laitv-stg-builder
+
+jobs:
+  build-and-push:
+    name: Build & push GPU image to ECR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-aws-ecr-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.gpu
+          push: true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image summary
+        run: |
+          echo "Pushed to ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}"
+          echo "Tags: ${{ github.sha }}, latest"

@@ -1,0 +1,72 @@
+# ============================================================
+# LocalAI TV — GPU Builder Image (NVENC-accelerated bulletin builds)
+# ------------------------------------------------------------
+# Additive: the existing CPU `Dockerfile` (Hostinger path) is left untouched.
+# This image runs the video build path (video_builder.py + ticker_overlay.py)
+# on an ECS-on-EC2 g4dn (NVIDIA T4) worker, using h264_nvenc when VIDEO_ENCODER
+# selects it (Phase 3), with the libx264 fallback intact.
+#
+# Runtime requirement: the host must have the NVIDIA driver +
+# nvidia-container-toolkit (provided by the ECS GPU-optimized AMI in Phase 2).
+# NVENC needs the "video" driver capability — set below.
+#
+# Build/verify (no GPU needed to BUILD; only to RUN nvenc):
+#   docker build -f Dockerfile.gpu -t localaitv-builder:gpu .
+#   # the build fails fast if ffmpeg lacks h264_nvenc (guard below)
+# ============================================================
+
+# CUDA *runtime* base (smaller than devel; sufficient for ffmpeg NVENC).
+# Pin a 12.x that the ECS GPU AMI's driver supports on T4; adjust in Phase 2 if needed.
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+# NVENC requires the "video" capability; "compute,utility" cover CUDA + nvidia-smi.
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# ── System deps ──────────────────────────────────────────────────────────────
+#  - Python 3.11 (deadsnakes; Ubuntu 22.04 defaults to 3.10, app needs 3.11)
+#  - ffmpeg from Ubuntu repos (built with h264_nvenc/nvdec; loads driver libs at runtime)
+#  - Telugu fonts (same as the CPU Dockerfile)
+#  - libpq-dev + gcc for psycopg2 build if needed
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates curl gnupg \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-venv python3.11-dev \
+        ffmpeg \
+        libpq-dev gcc \
+        fonts-noto-core fonts-noto-ui-core \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Fail fast if ffmpeg has no NVENC encoder (verifies the build, no GPU needed) ──
+RUN ffmpeg -hide_banner -encoders 2>/dev/null | grep -q 'h264_nvenc' \
+    && echo "[OK] h264_nvenc present in ffmpeg" \
+    || (echo "[FATAL] h264_nvenc NOT in this ffmpeg build — switch to a source/static build" && exit 1)
+
+# ── Python dependencies ──────────────────────────────────────────────────────
+COPY requirements.txt .
+RUN python3.11 -m pip install --no-cache-dir -r requirements.txt
+
+# ── Playwright Chromium (used by ticker_overlay.py) + its OS deps ────────────
+RUN python3.11 -m playwright install --with-deps chromium
+
+# ── Application code ─────────────────────────────────────────────────────────
+COPY . .
+
+# ── Runtime directories (mirror the CPU Dockerfile) ──────────────────────────
+RUN mkdir -p /app/inputs/{images,videos,audios} \
+             /app/outputs/{scripts,headlines,audios,reporters,item_video_cache,s3_inject_cache,bulletins} \
+             /app/assets/ads
+
+# The SQS build-worker entrypoint is added in Phase 3 (BUILD_BACKEND=sqs).
+# Until then the ECS task definition supplies the command; this is a safe default.
+CMD ["python", "-c", "print('localaitv GPU builder image ready — provide worker command via ECS task definition')"]
