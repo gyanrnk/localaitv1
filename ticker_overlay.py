@@ -392,6 +392,13 @@ def _build_ad_html(ad_text: str, font_size: int,
             f"src:url('file://{fp}');font-weight:600;}}"
         )
 
+    # Ads loudspeaker 📢 → mirror it horizontally so it faces RIGHT (toward the text).
+    # The default font glyph faces left; scaleX(-1) flips JUST the emoji. Stays a 📢
+    # emoji (headline mic image is left untouched).
+    _flip = ('<span style="display:inline-block;transform:scaleX(-1);">'
+             '\U0001F4E2</span>')
+    ad_text = ad_text.replace('\U0001F4E2', _flip)
+
     full_content = (ad_text + f'  {AD_SEP}  ') * repeats
 
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
