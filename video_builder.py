@@ -2291,8 +2291,8 @@ def build_bulletin_video(bulletin_dir: str, logo_path: str,
     else:
         print(f"  ℹ️ No anchor clips in assets/anchors/ — skipping welcome anchor")
 
-    from config import get_channel_cap1_path as _get_cap1
-    filler_png  = os.path.join(BASE_DIR, 'assets', 'filler.mp4')
+    from config import get_channel_cap1_path as _get_cap1, get_channel_filler_path as _get_filler
+    filler_png  = _get_filler(channel_name, BASE_DIR)   # GEO-FIRST per channel (no cross-district Kurnool leak)
     break_video = os.path.join(BASE_DIR, 'assets', 'break.mp4')
     break_news  = _get_cap1(channel_name, BASE_DIR)
     break_media = break_video if os.path.exists(break_video) else filler_png

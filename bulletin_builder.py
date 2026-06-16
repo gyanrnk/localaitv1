@@ -1728,7 +1728,10 @@ def build_all_location_bulletins(duration_minutes: int) -> dict:
             return ts >= _cutoff
         except Exception:
             return True
-    all_items = [i for i in all_items if _in_24hr(i)]
+    # 24h window gates FRESH (used_count==0) items only. OLD (used_count>0) backfill
+    # items are kept REGARDLESS of age so a low-volume channel fills its budget with
+    # its OWN older content instead of cross-district filler (location-wise rule).
+    all_items = [i for i in all_items if (i.get('used_count', 0) > 0) or _in_24hr(i)]
 
     if not all_items:
         print("❌ No items in metadata")

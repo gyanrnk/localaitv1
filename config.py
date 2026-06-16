@@ -123,6 +123,27 @@ def get_channel_cap1_path(channel_name: str, base_dir: str = None) -> str:
     return local_fb
 
 
+def get_channel_filler_path(channel_name: str, base_dir: str = None) -> str:
+    """Channel-specific FILLER video (GEO-FIRST, location-wise). Resolves
+    geo/states/<state>/districts/<ch>/filler/filler.mp4, else local
+    assets/filler_<channel>.mp4, else assets/filler.mp4. Prevents another
+    district's branded filler (e.g. Kurnool) leaking into a channel's
+    bulletin — its OWN geo filler wins. Crash-proof (geo_asset falls back)."""
+    _base = base_dir or BASE_DIR
+    channel_key = (channel_name or '').lower().replace(' ', '_').replace('-', '_')
+    specific = os.path.join(_base, 'assets', f'filler_{channel_key}.mp4')
+    local_fb = specific if os.path.exists(specific) else os.path.join(_base, 'assets', 'filler.mp4')
+    gp = geo_district_prefix(channel_name)
+    if gp:
+        try:
+            import s3_storage as _s3
+            return _s3.geo_asset(f"{gp}/filler/filler.mp4", local_fallback=local_fb,
+                                 cache_name=f"geo_filler_{channel_key}.mp4", min_size=50_000)
+        except Exception:
+            pass
+    return local_fb
+
+
 def get_anchor_clip(base_dir: str = None) -> str:
     """Pick a RANDOM 'welcome anchor' clip from assets/anchors/ (shared pool).
 
