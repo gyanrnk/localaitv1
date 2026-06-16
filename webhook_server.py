@@ -1200,14 +1200,15 @@ def _run_planner():
                     import re as _re
                     _chan = info.get('location_name', 'General')
                     _bul_name = os.path.basename(bulletin_dir)
-                    # GEO location-wise storage: geo/states/<state>/districts/<dist>/news_bulletins/
-                    # bul_<ts>.mp4 — unique key + immutable Cache-Control (upload_file sets it),
-                    # mirroring the working legacy pattern (NO notebooklm date-key staleness).
+                    # GEO location-wise storage: geo/states/<state>/districts/<dist>/local/bulletins/
+                    # bul_<ts>.mp4 — matches the existing geo kind convention (local/{bulletins,notebooklm})
+                    # that already exists in the bucket. Unique key + immutable Cache-Control (upload_file
+                    # sets it), mirroring the working legacy pattern (NO notebooklm date-key staleness).
                     # Unknown channel/state → fall back to legacy bulletins/<Channel>/ (nothing breaks).
                     from config import geo_district_prefix as _gdp
                     _geo_pref = _gdp(_chan)
                     if _geo_pref:
-                        _s3_key = f"{_geo_pref}/news_bulletins/{_bul_name}.mp4"
+                        _s3_key = f"{_geo_pref}/local/bulletins/{_bul_name}.mp4"
                     else:
                         _s3_key = _s3_ws.key_for_bulletin_video(
                             _re.sub(r'[^\w\-]', '_', _chan).title(), _bul_name
@@ -1895,7 +1896,7 @@ def cleanup_old_data_loop():
                     aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
                 )
                 _cut_nlm = datetime.now(_tz.utc) - _td(days=_nlm_days)
-                # MAIN news bulletins now ALSO live in geo (.../news_bulletins/bul_<ts>.mp4);
+                # MAIN news bulletins now ALSO live in geo (.../<district>/local/bulletins/bul_<ts>.mp4);
                 # prune them like legacy STEP 12 (keep ALL within retention, delete older) so the
                 # UI feed keeps recent history. Tunable: S3_BULLETIN_RETENTION_DAYS.
                 _news_days = int(os.getenv('S3_BULLETIN_RETENTION_DAYS', '7'))
@@ -1913,7 +1914,7 @@ def cleanup_old_data_loop():
                             _parts = _fn.split('_')
                             _kind  = _parts[1] if len(_parts) >= 3 else ''
                             _grp.setdefault((_folder, _kind), []).append(_o)
-                        elif '/news_bulletins/' in _k:
+                        elif '/bulletins/' in _k:          # geo local/district main bulletins (.../local/bulletins/bul_*.mp4)
                             if not (_fn.startswith('bul_') and _fn.endswith('.mp4')):
                                 continue
                             _grp.setdefault((_folder, 'news'), []).append(_o)
