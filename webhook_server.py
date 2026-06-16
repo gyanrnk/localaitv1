@@ -1200,9 +1200,18 @@ def _run_planner():
                     import re as _re
                     _chan = info.get('location_name', 'General')
                     _bul_name = os.path.basename(bulletin_dir)
-                    _s3_key = _s3_ws.key_for_bulletin_video(
-                        _re.sub(r'[^\w\-]', '_', _chan).title(), _bul_name
-                    )
+                    # GEO location-wise storage: geo/states/<state>/districts/<dist>/news_bulletins/
+                    # bul_<ts>.mp4 — unique key + immutable Cache-Control (upload_file sets it),
+                    # mirroring the working legacy pattern (NO notebooklm date-key staleness).
+                    # Unknown channel/state → fall back to legacy bulletins/<Channel>/ (nothing breaks).
+                    from config import geo_district_prefix as _gdp
+                    _geo_pref = _gdp(_chan)
+                    if _geo_pref:
+                        _s3_key = f"{_geo_pref}/news_bulletins/{_bul_name}.mp4"
+                    else:
+                        _s3_key = _s3_ws.key_for_bulletin_video(
+                            _re.sub(r'[^\w\-]', '_', _chan).title(), _bul_name
+                        )
                     _s3_video_url = _s3_ws.public_url(_s3_key)
 
                     def _on_upload_done(_bdir=bulletin_dir, _vurl=_s3_video_url,
@@ -1722,6 +1731,26 @@ def cleanup_old_data_loop():
                     logger.info(f"🗑️ Deleted bulletin dir: {bname}")
                 except Exception as e:
                     logger.warning(f"⚠️ Could not delete bulletin {bpath}: {e}")
+            elif age_sec > 3600:
+                # "Skip local" disk reclaim: ~1h+ after build (build + S3 upload + first stream
+                # rotation done), delete build SCRATCH the live stream NEVER reads — segments/,
+                # item_videos/, *_staging.mp4 (~750MB/dir) — but KEEP the final bul_<ts>.mp4 +
+                # manifest (stream + UI need them for the 24h rotation). Reuse cache is the
+                # SEPARATE outputs/item_video_cache/, so re-render is unaffected.
+                for _scratch in ('segments', 'item_videos'):
+                    _sp = os.path.join(bpath, _scratch)
+                    if os.path.isdir(_sp):
+                        try:
+                            _shutil.rmtree(_sp)
+                            logger.info(f"🧹 Scratch pruned {bname}/{_scratch}")
+                        except Exception:
+                            pass
+                try:
+                    for _f in os.listdir(bpath):
+                        if _f.endswith('_staging.mp4'):
+                            os.remove(os.path.join(bpath, _f))
+                except Exception:
+                    pass
 
         if os.path.exists(BULLETINS_DIR):
             for entry in os.listdir(BULLETINS_DIR):
@@ -1865,37 +1894,52 @@ def cleanup_old_data_loop():
                     aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
                     aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
                 )
-                _cut = datetime.now(_tz.utc) - _td(days=_nlm_days)
+                _cut_nlm = datetime.now(_tz.utc) - _td(days=_nlm_days)
+                # MAIN news bulletins now ALSO live in geo (.../news_bulletins/bul_<ts>.mp4);
+                # prune them like legacy STEP 12 (keep ALL within retention, delete older) so the
+                # UI feed keeps recent history. Tunable: S3_BULLETIN_RETENTION_DAYS.
+                _news_days = int(os.getenv('S3_BULLETIN_RETENTION_DAYS', '7'))
+                _cut_news  = datetime.now(_tz.utc) - _td(days=_news_days)
                 _grp = {}   # (folder, kind) -> [obj, ...]
                 _pg = _s3n.get_paginator('list_objects_v2')
                 for _page in _pg.paginate(Bucket=S3_BUCKET_NAME, Prefix='geo/'):
                     for _o in _page.get('Contents', []):
                         _k = _o['Key']
-                        if '/notebooklm_processed/' not in _k:
-                            continue
                         _fn = _k.rsplit('/', 1)[-1]
-                        if not (_fn.startswith('nlm_') and _fn.endswith('.mp4')):
-                            continue
-                        _parts = _fn.split('_')
-                        _kind  = _parts[1] if len(_parts) >= 3 else ''
                         _folder = _k.rsplit('/', 1)[0]
-                        _grp.setdefault((_folder, _kind), []).append(_o)
+                        if '/notebooklm_processed/' in _k:
+                            if not (_fn.startswith('nlm_') and _fn.endswith('.mp4')):
+                                continue
+                            _parts = _fn.split('_')
+                            _kind  = _parts[1] if len(_parts) >= 3 else ''
+                            _grp.setdefault((_folder, _kind), []).append(_o)
+                        elif '/news_bulletins/' in _k:
+                            if not (_fn.startswith('bul_') and _fn.endswith('.mp4')):
+                                continue
+                            _grp.setdefault((_folder, 'news'), []).append(_o)
                 _del = []
-                for _objs in _grp.values():
-                    _objs.sort(key=lambda x: x['LastModified'], reverse=True)
-                    for _o in _objs[1:]:            # newest per (district,kind) ALWAYS kept
-                        if _o['LastModified'] < _cut:
-                            _del.append({'Key': _o['Key']})
+                for (_folder, _kind), _objs in _grp.items():
+                    if _kind == 'news':
+                        # age-based (keep all < retention; preserve recent feed history)
+                        for _o in _objs:
+                            if _o['LastModified'] < _cut_news:
+                                _del.append({'Key': _o['Key']})
+                    else:
+                        # notebooklm: newest-per-(district,kind) ALWAYS kept, others > retention deleted
+                        _objs.sort(key=lambda x: x['LastModified'], reverse=True)
+                        for _o in _objs[1:]:
+                            if _o['LastModified'] < _cut_nlm:
+                                _del.append({'Key': _o['Key']})
                 _ndel = 0
                 for _i in range(0, len(_del), 1000):
                     _chunk = _del[_i:_i + 1000]
                     _r = _s3n.delete_objects(Bucket=S3_BUCKET_NAME,
                                              Delete={'Objects': _chunk, 'Quiet': True})
                     _ndel += len(_chunk) - len(_r.get('Errors', []))
-                logger.info(f"🗑️ geo notebooklm_processed prune: deleted {_ndel} object(s) "
-                            f"older than {_nlm_days}d (newest-per-district/kind kept)")
+                logger.info(f"🗑️ geo prune (notebooklm + news_bulletins): deleted {_ndel} object(s) "
+                            f"(notebooklm >{_nlm_days}d newest-per-kind kept; news >{_news_days}d)")
         except Exception as e:
-            logger.warning(f"⚠️ geo notebooklm_processed prune failed: {e}")
+            logger.warning(f"⚠️ geo prune failed: {e}")
 
         # ══════════════════════════════════════════════════════════════════════
         # DONE
