@@ -798,6 +798,8 @@ def _run_planner():
     if not _building_lock.acquire(blocking=False):
         logger.info("🔒 Bulletin build already in progress — skipping this cycle")
         return
+    _lock_held = True   # released EARLY (after selection) so the planner isn't blocked
+                        # for the full ~80-min render; finally release is guarded by this.
 
     try:
         logger.info("🔨 Building bulletins (all locations)...")
@@ -865,6 +867,17 @@ def _run_planner():
         if not results:
             logger.warning("⚠️ No items — bulletin not built")
             return
+
+        # ── SELECTION done (build_all_location_bulletins already flipped used_count++/
+        # bulletined=1 for the chosen items, under the lock). RELEASE the lock NOW,
+        # before the slow per-channel render loop below. Renders are already serialized
+        # by the single global BuildQueue worker (governor/build_queue.py), so the
+        # post-build loop is safe lock-free — and planner_loop's gate clears within
+        # seconds, so freshly-approved items trigger the NEXT selection pass promptly
+        # (fresh load_metadata) instead of waiting the full ~80-min sequential render.
+        # (Next pass re-reads the DB, so no _items_override change is needed.)
+        _building_lock.release()
+        _lock_held = False
 
         _base      = BASE_DIR or os.path.dirname(os.path.abspath(__file__))
 
@@ -1274,7 +1287,8 @@ def _run_planner():
         logger.error(f"❌ Planner build error: {e}", exc_info=True)
 
     finally:
-        _building_lock.release()
+        if _lock_held:      # guarded: lock already released after selection in the happy path
+            _building_lock.release()
 
 
 
