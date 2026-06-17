@@ -171,31 +171,60 @@ class TTSHandler:
         """Deprecated: use for_item() instead."""
         return cls(speaker="aoede")
 
-    def _chunk_text(self, text: str, max_bytes: int = 4500) -> list:
-        """Split text into chunks whose UTF-8 size ≤ max_bytes."""
-        if len(text.encode("utf-8")) <= max_bytes:
-            return [text]
+    def _chunk_text(self, text: str, max_bytes: int = 4500,
+                    max_sentence_bytes: int = 600) -> list:
+        """Split into GCP chunks ≤ max_bytes AND ensure NO single 'sentence' exceeds
+        max_sentence_bytes. Chirp3-HD rejects long sentences ('400 ... sentence is too
+        long'), so the old early-return-whole-text path (when total ≤ max_bytes) sent
+        Telugu citizen scripts — a headline line + '\\n\\n' + body, often with no
+        sentence-ending punctuation — as ONE giant 'sentence' → 400 → no audio →
+        item dropped. We now ALWAYS sentence-split (on punctuation AND newlines) and
+        force-split any over-long run so every sentence is small enough for GCP."""
+        # Sentence pieces: split on sentence punctuation OR newlines (headline vs body).
+        pieces = [p.strip() for p in re.split(r'(?<=[.!?।])\s+|[\n]+', text) if p.strip()]
+        # Force-split any piece larger than the per-sentence limit (a long run with no
+        # internal sentence punctuation) at comma/space boundaries.
+        sentences = []
+        for p in pieces:
+            if len(p.encode("utf-8")) <= max_sentence_bytes:
+                sentences.append(p)
+            else:
+                sentences.extend(self._force_split_sentence(p, max_sentence_bytes))
+        # Ensure each piece ENDS with sentence punctuation so GCP parses them
+        # separately and never merges two pieces back into one over-long sentence.
+        sentences = [s if s.endswith(('।', '.', '?', '!', '|')) else s + ' ।' for s in sentences]
 
-        sentences     = re.split(r'(?<=[.!?।])\s+', text)
-        chunks        = []
-        current       = []
-        current_bytes = 0
-
+        # Group sentences into ≤ max_bytes chunks (one GCP API call each).
+        chunks, current, current_bytes = [], [], 0
         for sent in sentences:
             sent_bytes = len(sent.encode("utf-8"))
-            if current_bytes + sent_bytes + 1 > max_bytes:
-                if current:
-                    chunks.append(" ".join(current))
-                current       = [sent]
-                current_bytes = sent_bytes
+            if current and current_bytes + sent_bytes + 1 > max_bytes:
+                chunks.append(" ".join(current))
+                current, current_bytes = [sent], sent_bytes
             else:
                 current.append(sent)
                 current_bytes += sent_bytes + 1
-
         if current:
             chunks.append(" ".join(current))
-
         return chunks if chunks else [text]
+
+    def _force_split_sentence(self, text: str, max_bytes: int) -> list:
+        """Break an over-long run (no usable sentence punctuation) into pieces whose
+        UTF-8 size ≤ max_bytes, breaking at comma/space boundaries (so Chirp3-HD sees
+        short-enough sentences instead of rejecting the whole script)."""
+        words = [w for w in re.split(r'(?<=[,;:।])\s+|\s+', text) if w]
+        out, cur, cur_b = [], [], 0
+        for w in words:
+            wb = len(w.encode("utf-8"))
+            if cur and cur_b + wb + 1 > max_bytes:
+                out.append(" ".join(cur))
+                cur, cur_b = [w], wb
+            else:
+                cur.append(w)
+                cur_b += wb + 1
+        if cur:
+            out.append(" ".join(cur))
+        return out
 
     def _call_tts_api(self, text_chunk: str, speaking_rate: float = 1.17) -> Optional[bytes]:
         """Call Google Cloud TTS for one text chunk. Returns raw MP3 bytes or None."""
