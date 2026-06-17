@@ -1517,10 +1517,10 @@ def cleanup_old_data_loop():
     from time import time, sleep
     from datetime import datetime, timezone, timedelta
 
-    MAX_AGE_SEC    = 24 * 60 * 60   # 24 hours
+    MAX_AGE_SEC    = 48 * 60 * 60   # 48 hours
     CHECK_INTERVAL = 1800           # har 30min mein check
 
-    logger.info("🧹 Cleanup loop started (24hr mode, checks every 1hr)")
+    logger.info("🧹 Cleanup loop started (48hr mode, checks every 1hr)")
 
     def _del_file(path: str):
         """Safe file delete with logging."""
