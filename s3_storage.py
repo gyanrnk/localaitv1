@@ -30,6 +30,16 @@ _BOTO_CONFIG = Config(
     response_checksum_validation='when_required',
 )
 
+# S3 bucket region — DECOUPLED from the compute AWS_REGION.
+# The app's S3 buckets live in ap-south-2 (Hyderabad), but the AWS *compute*
+# region may be ap-south-1 (ECS/SQS). Deriving the S3 region from AWS_REGION
+# mis-pointed the client at the compute region and broke item downloads with
+# "IllegalLocationConstraintException: ap-south-2 location constraint is
+# incompatible for the region specific endpoint". Use a dedicated S3_REGION
+# (default ap-south-2 = the bucket region) so S3 is always correct and the
+# compute region can be set independently.
+S3_REGION = os.getenv('S3_REGION', 'ap-south-2')
+
 # ── Singleton boto3 client ─────────────────────────────────────────────────────
 _lock   = threading.Lock()
 _client = None
@@ -38,7 +48,7 @@ def _get_client():
     global _client
     with _lock:
         if _client is None:
-            _region = os.getenv('AWS_REGION', 'ap-south-2')
+            _region = S3_REGION
             _client = boto3.client(
                 's3',
                 region_name=_region,
@@ -260,7 +270,7 @@ def public_url(s3_key: str, bucket: str = None) -> str:
     if _CDN_BASE_URL:
         return f"{_CDN_BASE_URL}/{s3_key}"
     bkt    = bucket or _bucket()
-    region = os.getenv('AWS_REGION', 'ap-south-2')
+    region = S3_REGION
     return f"https://{bkt}.s3.{region}.amazonaws.com/{s3_key}"
 
 
